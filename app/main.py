@@ -2,7 +2,6 @@ import csv
 import io
 import json
 import os
-import shutil
 import sqlite3
 import uuid
 import zipfile
@@ -13,7 +12,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -26,7 +25,7 @@ THUMB_DIR = DATA_DIR / "thumbs"
 EXPORT_DIR = DATA_DIR / "exports"
 DB_PATH = Path(os.getenv("SCREENWORK_DB_PATH", DATA_DIR / "screenwork.db"))
 STATIC_DIR = Path(__file__).parent / "static"
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ALLOWED_EXTENSIONS = {".png"}
 MAX_CATEGORY_DEPTH = 3
 
 
@@ -81,6 +80,7 @@ def init_db() -> None:
                 original_name TEXT NOT NULL,
                 mime_type TEXT NOT NULL,
                 size INTEGER NOT NULL,
+                source_size INTEGER,
                 width INTEGER,
                 height INTEGER,
                 category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
@@ -107,8 +107,30 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS work_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                purpose TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                combined_group_ids_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS work_group_images (
+                work_group_id INTEGER NOT NULL REFERENCES work_groups(id) ON DELETE CASCADE,
+                image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (work_group_id, image_id)
+            );
             """
         )
+        image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)").fetchall()}
+        if "source_size" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_size INTEGER")
+        conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
 
 
 @app.on_event("startup")
@@ -151,6 +173,24 @@ class SettingsPatch(BaseModel):
     metapi_model: str = ""
     metapi_provider: str = "openai"
     metapi_api_key: str = ""
+
+
+class WorkGroupIn(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    purpose: str = ""
+    notes: str = ""
+    tags: list[str] = []
+    image_ids: list[int] = []
+    combined_group_ids: list[int] = []
+
+
+class WorkGroupPatch(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    purpose: Optional[str] = None
+    notes: Optional[str] = None
+    tags: Optional[list[str]] = None
+    image_ids: Optional[list[int]] = None
+    combined_group_ids: Optional[list[int]] = None
 
 
 def get_category_depth(conn: sqlite3.Connection, category_id: Optional[int]) -> int:
@@ -218,21 +258,66 @@ def attach_image_urls(image: dict[str, Any], tags: list[str] | None = None) -> d
     return image
 
 
-def find_duplicate_image(conn: sqlite3.Connection, original_name: str, size: int) -> dict[str, Any] | None:
+def find_duplicate_image(conn: sqlite3.Connection, original_name: str, source_size: int) -> dict[str, Any] | None:
     row = conn.execute(
         """
         SELECT *
         FROM images
-        WHERE lower(original_name) = lower(?) AND size = ?
+        WHERE lower(original_name) = lower(?) AND source_size = ?
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (original_name, size),
+        (original_name, source_size),
     ).fetchone()
     if not row:
         return None
     image = dict(row)
     return attach_image_urls(image, get_image_tags(conn, image["id"]))
+
+
+def serialize_work_group(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    include_images: bool = False,
+) -> dict[str, Any]:
+    group = dict(row)
+    group["tags"] = json.loads(group.pop("tags_json") or "[]")
+    combined_ids = json.loads(group.pop("combined_group_ids_json") or "[]")
+    group["combined_group_ids"] = combined_ids
+    group["combined_groups"] = []
+    if combined_ids:
+        placeholders = ",".join("?" for _ in combined_ids)
+        rows = conn.execute(
+            f"SELECT id, title FROM work_groups WHERE id IN ({placeholders}) ORDER BY title",
+            combined_ids,
+        ).fetchall()
+        group["combined_groups"] = [dict(item) for item in rows]
+    if include_images:
+        rows = conn.execute(
+            """
+            SELECT i.*
+            FROM images i
+            JOIN work_group_images wgi ON wgi.image_id = i.id
+            WHERE wgi.work_group_id = ?
+            ORDER BY wgi.sort_order, i.created_at DESC
+            """,
+            (group["id"],),
+        ).fetchall()
+        group["images"] = [attach_image_urls(dict(item), get_image_tags(conn, item["id"])) for item in rows]
+    return group
+
+
+def replace_work_group_images(conn: sqlite3.Connection, group_id: int, image_ids: list[int]) -> None:
+    conn.execute("DELETE FROM work_group_images WHERE work_group_id = ?", (group_id,))
+    seen: set[int] = set()
+    for sort_order, image_id in enumerate(image_ids):
+        if image_id in seen:
+            continue
+        seen.add(image_id)
+        conn.execute(
+            "INSERT OR IGNORE INTO work_group_images (work_group_id, image_id, sort_order) VALUES (?, ?, ?)",
+            (group_id, image_id, sort_order),
+        )
 
 
 def set_image_tags(conn: sqlite3.Connection, image_id: int, tags: list[str]) -> None:
@@ -250,6 +335,20 @@ def save_thumbnail(source_path: Path, thumb_path: Path) -> tuple[int | None, int
         if image.mode not in ("RGB", "RGBA"):
             image = image.convert("RGB")
         image.save(thumb_path, format="WEBP", quality=82)
+        return width, height
+
+
+def save_as_jpg(source_bytes: bytes, target_path: Path) -> tuple[int | None, int | None]:
+    with Image.open(io.BytesIO(source_bytes)) as image:
+        width, height = image.size
+        if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+            rgba = image.convert("RGBA")
+            background = Image.new("RGB", rgba.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.split()[-1])
+            image = background
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(target_path, format="JPEG", quality=80, optimize=True)
         return width, height
 
 
@@ -358,41 +457,43 @@ async def upload_images(
         for file in files:
             original_name = file.filename or "screenshot"
             ext = Path(original_name).suffix.lower()
-            if ext not in ALLOWED_EXTENSIONS or not file.content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail=f"Unsupported image file: {original_name}")
+            if ext not in ALLOWED_EXTENSIONS or file.content_type not in {"image/png", "image/x-png"}:
+                raise HTTPException(status_code=400, detail=f"Only PNG images are supported: {original_name}")
 
             image_id = uuid.uuid4().hex
-            filename = f"{image_id}{ext}"
+            filename = f"{image_id}.jpg"
             thumb_filename = f"{image_id}.webp"
             target = UPLOAD_DIR / filename
             thumb = THUMB_DIR / thumb_filename
 
-            with target.open("wb") as out:
-                shutil.copyfileobj(file.file, out)
-            size = target.stat().st_size
-            duplicate = find_duplicate_image(conn, original_name, size)
+            source_bytes = await file.read()
+            source_size = len(source_bytes)
+            duplicate = find_duplicate_image(conn, original_name, source_size)
             try:
-                width, height = save_thumbnail(target, thumb)
+                width, height = save_as_jpg(source_bytes, target)
+                save_thumbnail(target, thumb)
             except Exception as exc:
                 target.unlink(missing_ok=True)
                 thumb.unlink(missing_ok=True)
                 raise HTTPException(status_code=400, detail=f"Invalid image file: {original_name}") from exc
+            size = target.stat().st_size
 
             created_at = now_iso()
             cur = conn.execute(
                 """
                 INSERT INTO images (
-                    filename, thumb_filename, original_name, mime_type, size, width, height,
+                    filename, thumb_filename, original_name, mime_type, size, source_size, width, height,
                     category_id, title, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     filename,
                     thumb_filename,
                     original_name,
-                    file.content_type,
+                    "image/jpeg",
                     size,
+                    source_size,
                     width,
                     height,
                     category_id,
@@ -563,6 +664,78 @@ def list_tags() -> list[str]:
     with db() as conn:
         rows = conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
         return [row["name"] for row in rows]
+
+
+@app.get("/api/work-groups")
+def list_work_groups() -> list[dict[str, Any]]:
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM work_groups ORDER BY updated_at DESC").fetchall()
+        return [serialize_work_group(conn, row) for row in rows]
+
+
+@app.post("/api/work-groups")
+def create_work_group(payload: WorkGroupIn) -> dict[str, Any]:
+    with db() as conn:
+        timestamp = now_iso()
+        cur = conn.execute(
+            """
+            INSERT INTO work_groups (
+                title, purpose, notes, tags_json, combined_group_ids_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.title.strip(),
+                payload.purpose.strip(),
+                payload.notes.strip(),
+                json.dumps(normalize_tags(payload.tags), ensure_ascii=False),
+                json.dumps(payload.combined_group_ids),
+                timestamp,
+                timestamp,
+            ),
+        )
+        group_id = cur.lastrowid
+        replace_work_group_images(conn, group_id, payload.image_ids)
+        row = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        return serialize_work_group(conn, row, include_images=True)
+
+
+@app.get("/api/work-groups/{group_id}")
+def get_work_group(group_id: int) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Work group not found")
+        return serialize_work_group(conn, row, include_images=True)
+
+
+@app.patch("/api/work-groups/{group_id}")
+def update_work_group(group_id: int, payload: WorkGroupPatch) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Work group not found")
+        fields = payload.model_fields_set
+        updates = []
+        params: list[Any] = []
+        for field in ("title", "purpose", "notes"):
+            if field in fields:
+                updates.append(f"{field} = ?")
+                params.append((getattr(payload, field) or "").strip())
+        if "tags" in fields:
+            updates.append("tags_json = ?")
+            params.append(json.dumps(normalize_tags(payload.tags), ensure_ascii=False))
+        if "combined_group_ids" in fields:
+            updates.append("combined_group_ids_json = ?")
+            params.append(json.dumps(payload.combined_group_ids or []))
+        if updates:
+            updates.append("updated_at = ?")
+            params.extend([now_iso(), group_id])
+            conn.execute(f"UPDATE work_groups SET {', '.join(updates)} WHERE id = ?", params)
+        if payload.image_ids is not None:
+            replace_work_group_images(conn, group_id, payload.image_ids)
+        updated = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        return serialize_work_group(conn, updated, include_images=True)
 
 
 @app.get("/api/settings")

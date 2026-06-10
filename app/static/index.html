@@ -11,7 +11,7 @@
       <div class="brand">Screenwork</div>
       <label class="button primary">
         上传
-        <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+        <input id="uploadInput" type="file" accept="image/png,.png" multiple hidden />
       </label>
       <a class="button ghost" href="/upload.html">上传页</a>
       <select id="statusFilter" class="control" aria-label="状态">
@@ -27,11 +27,20 @@
 
     <main class="workspace">
       <aside class="sidebar">
-        <div class="sidebar-head">
-          <strong>分类</strong>
-          <button id="newRootButton" class="small-button">+</button>
+        <div class="sidebar-section">
+          <div class="sidebar-head">
+            <strong>分类</strong>
+            <button id="newRootButton" class="small-button">+</button>
+          </div>
+          <div id="categoryTree" class="tree"></div>
         </div>
-        <div id="categoryTree" class="tree"></div>
+        <div class="sidebar-section">
+          <div class="sidebar-head">
+            <strong>工作</strong>
+            <button id="newWorkButton" class="small-button">+</button>
+          </div>
+          <div id="workGroupList" class="tree"></div>
+        </div>
       </aside>
 
       <section class="content">

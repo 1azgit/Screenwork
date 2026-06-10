@@ -1,9 +1,12 @@
 const state = {
   categories: [],
+  workGroups: [],
   categoryId: null,
   images: [],
   selectedId: null,
   selectedIds: new Set(),
+  mode: "images",
+  workPicker: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -50,6 +53,7 @@ function renderCategories() {
   all.className = `tree-button ${state.categoryId === null ? "active" : ""}`;
   all.textContent = "全部截图";
   all.onclick = () => {
+    state.mode = "images";
     state.categoryId = null;
     renderCategories();
     loadImages();
@@ -66,6 +70,7 @@ function renderCategories() {
     button.style.paddingLeft = `${8 + (depth - 1) * 8}px`;
     button.textContent = node.name;
     button.onclick = () => {
+      state.mode = "images";
       state.categoryId = node.id;
       renderCategories();
       loadImages();
@@ -89,6 +94,30 @@ function renderCategories() {
   for (const node of state.categories) root.appendChild(renderNode(node, 1));
 }
 
+async function loadWorkGroups() {
+  state.workGroups = await api("/api/work-groups");
+  renderWorkGroups();
+}
+
+function renderWorkGroups() {
+  const root = $("workGroupList");
+  root.innerHTML = "";
+  if (!state.workGroups.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted-line";
+    empty.textContent = "暂无工作项目";
+    root.appendChild(empty);
+    return;
+  }
+  for (const group of state.workGroups) {
+    const button = document.createElement("button");
+    button.className = "tree-button";
+    button.textContent = group.title;
+    button.onclick = () => openWorkGroup(group.id);
+    root.appendChild(button);
+  }
+}
+
 async function createCategory(parentId = null) {
   const name = prompt("分类名称");
   if (!name) return;
@@ -105,6 +134,7 @@ async function createCategory(parentId = null) {
 }
 
 async function loadImages() {
+  if (state.mode !== "images") return;
   const params = new URLSearchParams();
   if (state.categoryId) params.set("category_id", state.categoryId);
   if ($("statusFilter").value) params.set("status", $("statusFilter").value);
@@ -118,6 +148,7 @@ async function loadImages() {
 
 function renderImages() {
   const grid = $("imageGrid");
+  grid.className = "image-grid";
   grid.innerHTML = "";
   for (const image of state.images) {
     const card = document.createElement("article");
@@ -262,6 +293,227 @@ async function exportSelected() {
   setStatus("导出完成");
 }
 
+async function startNewWorkGroup() {
+  state.mode = "workBuilder";
+  state.workPicker = {
+    images: [],
+    selectedIds: new Set(),
+    tags: [],
+    dragMode: "add",
+  };
+  const tags = await api("/api/tags");
+  renderWorkBuilder(tags);
+  renderWorkPicker();
+  setStatus("选择 TAG 后默认全选匹配照片");
+}
+
+function renderWorkBuilder(tags) {
+  const panel = $("detailPanel");
+  const tagOptions = tags.map((tag) => `<option value="${escapeAttr(tag)}">${escapeHtml(tag)}</option>`).join("");
+  const groupOptions = state.workGroups
+    .map((group) => `<option value="${group.id}">${escapeHtml(group.title)}</option>`)
+    .join("");
+  panel.className = "detail work-detail";
+  panel.innerHTML = `
+    <form id="workForm">
+      <label>标题<input id="workTitle" class="control" placeholder="工作项目标题" required /></label>
+      <label>工作目的<textarea id="workPurpose" class="control" placeholder="这组截图要解决什么问题"></textarea></label>
+      <label>TAG
+        <select id="workTags" class="control" multiple size="${Math.min(Math.max(tags.length, 3), 8)}">${tagOptions}</select>
+      </label>
+      <label>组合工作组
+        <select id="combinedGroups" class="control" multiple size="${Math.min(Math.max(state.workGroups.length, 2), 6)}">${groupOptions}</select>
+      </label>
+      <label>备注<textarea id="workNotes" class="control"></textarea></label>
+      <div class="work-actions">
+        <button id="dragAddButton" class="button primary" type="button">框选加入</button>
+        <button id="dragRemoveButton" class="button" type="button">框选移除</button>
+      </div>
+      <div class="selected-count" id="workSelectedCount">已选 0 张</div>
+      <button class="button primary" type="submit">确定加入工作组</button>
+    </form>
+  `;
+  $("workTags").onchange = loadWorkPickerImages;
+  $("dragAddButton").onclick = () => setDragMode("add");
+  $("dragRemoveButton").onclick = () => setDragMode("remove");
+  $("workForm").onsubmit = saveWorkGroup;
+}
+
+function setDragMode(mode) {
+  state.workPicker.dragMode = mode;
+  $("dragAddButton").classList.toggle("primary", mode === "add");
+  $("dragRemoveButton").classList.toggle("primary", mode === "remove");
+  setStatus(mode === "add" ? "框选会加入照片" : "框选会移除照片");
+}
+
+async function loadWorkPickerImages() {
+  const selectedTags = [...$("workTags").selectedOptions].map((option) => option.value);
+  state.workPicker.tags = selectedTags;
+  if (!selectedTags.length) {
+    state.workPicker.images = [];
+    state.workPicker.selectedIds.clear();
+    renderWorkPicker();
+    setStatus("请选择 TAG");
+    return;
+  }
+  const data = await api("/api/images?page_size=200");
+  const images = data.items.filter((image) => image.tags?.some((tag) => selectedTags.includes(tag)));
+  state.workPicker.images = images;
+  state.workPicker.selectedIds = new Set(images.map((image) => image.id));
+  renderWorkPicker();
+  setStatus(`${images.length} 张匹配照片，已默认全选`);
+}
+
+function renderWorkPicker() {
+  const grid = $("imageGrid");
+  grid.className = "image-grid work-picker-grid";
+  grid.innerHTML = "";
+  const picker = state.workPicker;
+  if (!picker || !picker.images.length) {
+    grid.innerHTML = '<div class="empty-state">选择 TAG 后显示照片</div>';
+    updateWorkSelectedCount();
+    return;
+  }
+  for (const image of picker.images) {
+    const selected = picker.selectedIds.has(image.id);
+    const card = document.createElement("article");
+    card.className = `image-card work-pick-card ${selected ? "selected" : ""}`;
+    card.dataset.imageId = image.id;
+    card.innerHTML = `
+      <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
+      <div class="card-body">
+        <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
+        <div class="tag-line">${escapeHtml((image.tags || []).join(", "))}</div>
+      </div>
+    `;
+    card.onclick = () => {
+      toggleWorkImage(image.id);
+      renderWorkPicker();
+    };
+    grid.appendChild(card);
+  }
+  setupDragSelection(grid);
+  updateWorkSelectedCount();
+}
+
+function toggleWorkImage(imageId) {
+  const selected = state.workPicker.selectedIds;
+  if (selected.has(imageId)) selected.delete(imageId);
+  else selected.add(imageId);
+}
+
+function setupDragSelection(grid) {
+  let start = null;
+  let box = null;
+  grid.onmousedown = (event) => {
+    if (event.button !== 0 || !event.target.closest(".image-grid")) return;
+    start = { x: event.clientX, y: event.clientY };
+    box = document.createElement("div");
+    box.className = "selection-box";
+    document.body.appendChild(box);
+    event.preventDefault();
+  };
+  window.onmousemove = (event) => {
+    if (!start || !box) return;
+    const left = Math.min(start.x, event.clientX);
+    const top = Math.min(start.y, event.clientY);
+    const width = Math.abs(start.x - event.clientX);
+    const height = Math.abs(start.y - event.clientY);
+    Object.assign(box.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
+  };
+  window.onmouseup = () => {
+    if (!start || !box) return;
+    const boxRect = box.getBoundingClientRect();
+    for (const card of grid.querySelectorAll(".work-pick-card")) {
+      const rect = card.getBoundingClientRect();
+      const overlaps = !(rect.right < boxRect.left || rect.left > boxRect.right || rect.bottom < boxRect.top || rect.top > boxRect.bottom);
+      if (!overlaps) continue;
+      const imageId = Number(card.dataset.imageId);
+      if (state.workPicker.dragMode === "remove") state.workPicker.selectedIds.delete(imageId);
+      else state.workPicker.selectedIds.add(imageId);
+    }
+    box.remove();
+    start = null;
+    box = null;
+    renderWorkPicker();
+  };
+}
+
+function updateWorkSelectedCount() {
+  const count = state.workPicker?.selectedIds?.size || 0;
+  const target = $("workSelectedCount");
+  if (target) target.textContent = `已选 ${count} 张`;
+}
+
+async function saveWorkGroup(event) {
+  event.preventDefault();
+  const payload = {
+    title: $("workTitle").value,
+    purpose: $("workPurpose").value,
+    notes: $("workNotes").value,
+    tags: state.workPicker.tags,
+    image_ids: [...state.workPicker.selectedIds],
+    combined_group_ids: [...$("combinedGroups").selectedOptions].map((option) => Number(option.value)),
+  };
+  const group = await api("/api/work-groups", { method: "POST", body: JSON.stringify(payload) });
+  await loadWorkGroups();
+  renderWorkGroupDetail(group);
+  setStatus("工作项目已创建");
+}
+
+async function openWorkGroup(groupId) {
+  state.mode = "workDetail";
+  const group = await api(`/api/work-groups/${groupId}`);
+  renderWorkGroupDetail(group);
+}
+
+function renderWorkGroupDetail(group) {
+  const grid = $("imageGrid");
+  grid.className = "image-grid work-photo-list";
+  grid.innerHTML = "";
+  for (const image of group.images || []) {
+    const card = document.createElement("article");
+    card.className = "image-card";
+    card.innerHTML = `
+      <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
+      <div class="card-body">
+        <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
+        <div class="tag-line">${escapeHtml((image.tags || []).join(", "))}</div>
+        <div class="note-line">${escapeHtml(image.note || image.expanded_note || "")}</div>
+      </div>
+    `;
+    grid.appendChild(card);
+  }
+  const first = group.images?.[0];
+  const rest = (group.images || []).slice(1);
+  const panel = $("detailPanel");
+  panel.className = "detail work-detail";
+  panel.innerHTML = `
+    <h2>${escapeHtml(group.title)}</h2>
+    <section class="work-section"><strong>目的</strong><p>${escapeHtml(group.purpose || "")}</p></section>
+    <section class="work-section"><strong>组合工作组</strong><p>${escapeHtml((group.combined_groups || []).map((item) => item.title).join(", ") || "无")}</p></section>
+    <section class="work-section"><strong>TAG</strong><p>${escapeHtml((group.tags || []).join(", "))}</p></section>
+    <label>备注<textarea id="workDetailNotes" class="control">${escapeHtml(group.notes || "")}</textarea></label>
+    <button id="saveWorkNotes" class="button primary">保存备注</button>
+    <section class="work-display">
+      ${first ? `<img class="work-large" src="${first.image_url}" alt="${escapeHtml(first.title || first.original_name)}" />` : '<div class="empty-state">没有照片</div>'}
+      <div class="work-thumbs">
+        ${rest.map((image) => `<img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" />`).join("")}
+      </div>
+    </section>
+  `;
+  $("saveWorkNotes").onclick = async () => {
+    const updated = await api(`/api/work-groups/${group.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ notes: $("workDetailNotes").value }),
+    });
+    renderWorkGroupDetail(updated);
+    await loadWorkGroups();
+    setStatus("备注已保存");
+  };
+  setStatus(`工作项目：${group.title}`);
+}
+
 async function openSettings() {
   const settings = await api("/api/settings");
   $("metapiBaseUrl").value = settings.metapi_base_url || "";
@@ -314,6 +566,7 @@ function debounce(fn, wait = 300) {
 
 $("uploadInput").onchange = (event) => uploadSelected(event.target.files);
 $("newRootButton").onclick = () => createCategory(null);
+$("newWorkButton").onclick = startNewWorkGroup;
 $("refreshButton").onclick = loadImages;
 $("exportButton").onclick = exportSelected;
 $("settingsButton").onclick = openSettings;
@@ -322,4 +575,4 @@ $("statusFilter").onchange = loadImages;
 $("searchInput").oninput = debounce(loadImages);
 $("tagFilter").oninput = debounce(loadImages);
 
-Promise.all([loadCategories(), loadImages()]).catch((error) => setStatus(error.message));
+Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));

@@ -11,7 +11,7 @@
       <div class="brand">Screenwork 上传</div>
       <label class="button primary">
         选择图片
-        <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+        <input id="uploadInput" type="file" accept="image/png,.png" multiple hidden />
       </label>
       <button id="startButton" class="button">开始上传</button>
       <a class="button ghost" href="/">管理页</a>
@@ -33,7 +33,7 @@
 
         <div class="drop-zone" id="dropZone">
           <div>点击“选择图片”或把截图拖到这里</div>
-          <small>会根据文件名和文件大小提示是否已经上传过</small>
+          <small>PNG 原图上传后会自动转成 JPG，质量 80；会根据文件名和文件大小提示是否已经上传过</small>
         </div>
 
         <div class="upload-list" id="uploadList"></div>

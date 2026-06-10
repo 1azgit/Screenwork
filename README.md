@@ -5,8 +5,11 @@ Screenwork is a small internal web app for collecting and developing screenshot 
 ## Features
 
 - Mobile-friendly screenshot upload.
+- Dedicated upload page at `/upload.html`, suitable for bookmarking on mobile.
+- PNG uploads are converted to JPG with quality 80 before storage.
 - Header with title, upload, status filter, and settings.
 - Category menu with up to 3 levels.
+- Work project menu for grouping tagged screenshots into development tasks.
 - Image grid and detail editor.
 - Title, note, status, category, and TAG marking.
 - AI expansion through a local Metapi OpenAI-compatible or Claude-compatible API.

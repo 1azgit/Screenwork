@@ -48,7 +48,7 @@ async function api(path, options = {}) {
 async function chooseFiles(fileList) {
   filesState.length = 0;
   for (const file of fileList) {
-    if (file.type.startsWith("image/")) {
+    if (file.type === "image/png" || file.name.toLowerCase().endsWith(".png")) {
       filesState.push({
         id: crypto.randomUUID(),
         file,
@@ -57,7 +57,7 @@ async function chooseFiles(fileList) {
         percent: 0,
         speed: 0,
         duplicate: null,
-        error: "",
+        error: Math.abs(file.size - 2 * 1024 * 1024) > 128 * 1024 ? "文件大小不是约 2MB" : "",
       });
     }
   }
@@ -115,7 +115,7 @@ function renderList() {
         </div>
         <div class="progress"><div style="width:${item.percent}%"></div></div>
         ${renderDuplicate(item)}
-        ${item.error ? `<div class="upload-error">${escapeHtml(item.error)}</div>` : ""}
+        ${item.error ? `<div class="${item.status === "error" ? "upload-error" : "upload-warning"}">${escapeHtml(item.error)}</div>` : ""}
       </div>
     `;
     list.appendChild(row);
@@ -177,7 +177,7 @@ function uploadOne(item) {
     const startedAt = performance.now();
     form.append("files", item.file);
     item.status = "uploading";
-    item.error = "";
+    item.error = item.error === "文件大小不是约 2MB" ? item.error : "";
     renderList();
 
     xhr.upload.onprogress = (event) => {

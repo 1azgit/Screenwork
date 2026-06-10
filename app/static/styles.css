@@ -108,6 +108,12 @@ body {
   overflow: auto;
 }
 
+.sidebar-section + .sidebar-section {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
 .sidebar-head,
 .toolbar {
   display: flex;
@@ -180,11 +186,12 @@ body {
 
 .image-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
   align-content: start;
   overflow: auto;
   padding-bottom: 24px;
+  position: relative;
 }
 
 .image-card {
@@ -227,6 +234,82 @@ body {
   align-items: center;
   color: var(--muted);
   font-size: 12px;
+}
+
+.tag-line,
+.note-line,
+.muted-line,
+.selected-count {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.note-line {
+  max-height: 38px;
+  overflow: hidden;
+}
+
+.work-pick-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.2);
+}
+
+.selection-box {
+  position: fixed;
+  z-index: 9999;
+  border: 1px solid var(--accent);
+  background: rgba(15, 118, 110, 0.14);
+  pointer-events: none;
+}
+
+.work-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.work-detail h2 {
+  margin: 0 0 12px;
+}
+
+.work-section {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.work-section p {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.work-display {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.work-large {
+  width: 100%;
+  max-height: 52vh;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #eef1f4;
+}
+
+.work-thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.work-thumbs img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #eef1f4;
 }
 
 .detail {
@@ -463,6 +546,11 @@ textarea.control {
   font-size: 13px;
 }
 
+.upload-warning {
+  color: #a16207;
+  font-size: 13px;
+}
+
 @media (max-width: 860px) {
   .topbar {
     grid-template-columns: 1fr auto auto;
@@ -490,6 +578,10 @@ textarea.control {
 
   .workarea {
     height: auto;
+  }
+
+  .image-grid {
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   }
 
   .detail {
