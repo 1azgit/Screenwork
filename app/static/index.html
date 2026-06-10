@@ -45,8 +45,10 @@
 
       <section class="content">
         <div class="toolbar">
-          <input id="searchInput" class="control search" placeholder="搜索标题、内容" />
-          <input id="tagFilter" class="control" placeholder="TAG" />
+          <div class="search-box">
+            <input id="searchInput" class="control search" placeholder="搜索标题 / 内容 / TAG，双空格生成标记" />
+            <div id="searchTokens" class="search-tokens"></div>
+          </div>
           <select id="timeSort" class="control compact-control" aria-label="时间排序">
             <option value="newest">最新优先</option>
             <option value="oldest">最早优先</option>
@@ -56,9 +58,8 @@
             无内容
           </label>
           <button id="refreshButton" class="button">刷新</button>
-          <button id="selectAllButton" class="button">全选当前</button>
-          <button id="clearSelectionButton" class="button">取消选择</button>
-          <button id="batchEditButton" class="button">批量编辑</button>
+          <button id="cancelSelectionButton" class="button">取消</button>
+          <button id="deleteSelectedButton" class="button danger-button">删除</button>
           <button id="exportButton" class="button">导出选中</button>
         </div>
 

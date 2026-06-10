@@ -5,6 +5,7 @@ const state = {
   images: [],
   selectedId: null,
   selectedIds: new Set(),
+  searchTokens: [],
   mode: "images",
   workPicker: null,
 };
@@ -133,13 +134,59 @@ async function createCategory(parentId = null) {
   }
 }
 
+function addSearchToken(value) {
+  const token = value.trim();
+  if (!token || state.searchTokens.includes(token)) return;
+  state.searchTokens.push(token);
+  renderSearchTokens();
+}
+
+function renderSearchTokens() {
+  const box = $("searchTokens");
+  box.innerHTML = "";
+  for (const token of state.searchTokens) {
+    const chip = document.createElement("button");
+    chip.className = "search-token";
+    chip.type = "button";
+    chip.innerHTML = `${escapeHtml(token)} <span>×</span>`;
+    chip.onclick = () => {
+      state.searchTokens = state.searchTokens.filter((item) => item !== token);
+      renderSearchTokens();
+      loadImages();
+    };
+    box.appendChild(chip);
+  }
+}
+
+function handleSearchInput(event) {
+  const value = event.target.value;
+  if (/\s{2,}/.test(value)) {
+    const parts = value.split(/\s{2,}/);
+    for (const part of parts.slice(0, -1)) addSearchToken(part);
+    event.target.value = parts[parts.length - 1] || "";
+    loadImages();
+    return;
+  }
+  debounceLoadImages();
+}
+
+function handleSearchKeydown(event) {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  addSearchToken(event.target.value);
+  event.target.value = "";
+  loadImages();
+}
+
+const debounceLoadImages = debounce(loadImages);
+
 async function loadImages() {
   if (state.mode !== "images") return;
   const params = new URLSearchParams();
   if (state.categoryId) params.set("category_id", state.categoryId);
   if ($("statusFilter").value) params.set("status", $("statusFilter").value);
-  if ($("searchInput").value.trim()) params.set("q", $("searchInput").value.trim());
-  if ($("tagFilter").value.trim()) params.set("tag", $("tagFilter").value.trim().toLowerCase());
+  const queryTerms = [...state.searchTokens, $("searchInput").value.trim()].filter(Boolean);
+  if (queryTerms.length) params.set("q", queryTerms.join("  "));
   if ($("timeSort").value) params.set("sort", $("timeSort").value);
   if ($("noContentFilter").checked) params.set("no_content", "true");
   const data = await api(`/api/images?${params.toString()}`);
@@ -154,25 +201,27 @@ function renderImages() {
   grid.innerHTML = "";
   for (const image of state.images) {
     const card = document.createElement("article");
-    card.className = `image-card ${state.selectedId === image.id ? "active" : ""}`;
+    const isSelected = state.selectedIds.has(image.id);
+    card.className = `image-card ${state.selectedId === image.id ? "active" : ""} ${isSelected ? "selected" : ""}`;
     card.onclick = (event) => {
       if (event.target.type === "checkbox") return;
       selectImage(image.id);
     };
-    const checked = state.selectedIds.has(image.id) ? "checked" : "";
+    const checked = isSelected ? "checked" : "";
     card.innerHTML = `
       <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
       <div class="card-body">
         <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
-        <div class="card-meta">
+        <div class="card-meta">${escapeHtml(image.status)}</div>
+        <div class="card-select">
           <label><input type="checkbox" ${checked} /> 选择</label>
-          <span>${escapeHtml(image.status)}</span>
         </div>
       </div>
     `;
     card.querySelector("input").onchange = (event) => {
       if (event.target.checked) state.selectedIds.add(image.id);
       else state.selectedIds.delete(image.id);
+      renderImages();
     };
     grid.appendChild(card);
   }
@@ -281,6 +330,29 @@ function clearImageSelection() {
   state.selectedIds.clear();
   renderImages();
   setStatus("已取消选择");
+}
+
+async function deleteSelectedImages() {
+  if (!state.selectedIds.size) {
+    setStatus("先选择图片");
+    return;
+  }
+  const count = state.selectedIds.size;
+  if (!confirm(`确定删除 ${count} 张图片？`)) return;
+  try {
+    const result = await api("/api/images-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids: [...state.selectedIds] }),
+    });
+    state.selectedIds.clear();
+    state.selectedId = null;
+    await loadImages();
+    $("detailPanel").className = "detail empty";
+    $("detailPanel").innerHTML = '<div class="empty-state">选择一张截图开始整理</div>';
+    setStatus(`已删除 ${result.deleted} 张`);
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 function openBatchEditor() {
@@ -648,16 +720,15 @@ $("uploadInput").onchange = (event) => uploadSelected(event.target.files);
 $("newRootButton").onclick = () => createCategory(null);
 $("newWorkButton").onclick = startNewWorkGroup;
 $("refreshButton").onclick = loadImages;
-$("selectAllButton").onclick = selectAllCurrentImages;
-$("clearSelectionButton").onclick = clearImageSelection;
-$("batchEditButton").onclick = openBatchEditor;
+$("cancelSelectionButton").onclick = clearImageSelection;
+$("deleteSelectedButton").onclick = deleteSelectedImages;
 $("exportButton").onclick = exportSelected;
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
 $("statusFilter").onchange = loadImages;
 $("timeSort").onchange = loadImages;
 $("noContentFilter").onchange = loadImages;
-$("searchInput").oninput = debounce(loadImages);
-$("tagFilter").oninput = debounce(loadImages);
+$("searchInput").oninput = handleSearchInput;
+$("searchInput").onkeydown = handleSearchKeydown;
 
 Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));

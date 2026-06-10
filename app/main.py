@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import os
+import re
 import sqlite3
 import uuid
 import zipfile
@@ -167,6 +168,10 @@ class BulkImagePatch(BaseModel):
     category_id: Optional[int] = None
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
+
+
+class ImageIdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1)
 
 
 class DuplicateCandidate(BaseModel):
@@ -542,9 +547,24 @@ def list_images(
         where.append("i.status = ?")
         params.append(status)
     if q:
-        where.append("(i.title LIKE ? OR i.note LIKE ? OR i.expanded_note LIKE ?)")
-        like = f"%{q}%"
-        params.extend([like, like, like])
+        for term in [part.strip().lower() for part in re.split(r"\s{2,}", q) if part.strip()]:
+            like = f"%{term}%"
+            where.append(
+                """
+                (
+                    lower(i.title) LIKE ?
+                    OR lower(i.note) LIKE ?
+                    OR lower(i.expanded_note) LIKE ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM image_tags sit
+                        JOIN tags st ON st.id = sit.tag_id
+                        WHERE sit.image_id = i.id AND lower(st.name) LIKE ?
+                    )
+                )
+                """
+            )
+            params.extend([like, like, like, like])
     if no_content:
         where.append("trim(i.note) = '' AND trim(i.expanded_note) = ''")
     if tag:
@@ -651,6 +671,21 @@ def bulk_update_images(payload: BulkImagePatch) -> dict[str, Any]:
                 set_image_tags(conn, image_id, tags)
             changed += 1
         return {"ok": True, "updated": changed}
+
+
+@app.post("/api/images-delete")
+def delete_images(payload: ImageIdsIn) -> dict[str, Any]:
+    deleted = 0
+    with db() as conn:
+        for image_id in payload.ids:
+            row = conn.execute("SELECT filename, thumb_filename FROM images WHERE id = ?", (image_id,)).fetchone()
+            if not row:
+                continue
+            conn.execute("DELETE FROM images WHERE id = ?", (image_id,))
+            (UPLOAD_DIR / row["filename"]).unlink(missing_ok=True)
+            (THUMB_DIR / row["thumb_filename"]).unlink(missing_ok=True)
+            deleted += 1
+    return {"ok": True, "deleted": deleted}
 
 
 @app.post("/api/images/{image_id}/expand")

@@ -58,6 +58,11 @@ body {
   padding: 0 14px;
 }
 
+.danger-button {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .small-button {
   width: 28px;
   height: 28px;
@@ -173,8 +178,36 @@ body {
   margin-bottom: 14px;
 }
 
+.search-box {
+  min-width: min(420px, 100%);
+  display: grid;
+  gap: 6px;
+}
+
 .search {
   max-width: 360px;
+}
+
+.search-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.search-token {
+  min-height: 28px;
+  border: 1px solid #9ccac5;
+  background: #e8f3f1;
+  color: var(--accent-dark);
+  border-radius: 6px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.search-token span {
+  margin-left: 6px;
+  color: var(--danger);
 }
 
 .compact-control {
@@ -216,6 +249,11 @@ body {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.18);
 }
 
+.image-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.24);
+}
+
 .image-card img {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -238,11 +276,20 @@ body {
 }
 
 .card-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   color: var(--muted);
   font-size: 12px;
+}
+
+.card-select {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.card-select label {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  font-weight: 700;
 }
 
 .tag-line,
