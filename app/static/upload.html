@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Screenwork 上传</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="upload-page">
+    <header class="topbar upload-topbar">
+      <div class="brand">Screenwork 上传</div>
+      <label class="button primary">
+        选择图片
+        <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+      </label>
+      <button id="startButton" class="button">开始上传</button>
+      <a class="button ghost" href="/">管理页</a>
+      <div id="statusText" class="status">等待选择文件</div>
+    </header>
+
+    <main class="upload-shell">
+      <section class="upload-panel">
+        <div class="upload-summary">
+          <div>
+            <strong id="fileCount">0 个文件</strong>
+            <span id="totalSize">0 B</span>
+          </div>
+          <label class="inline-check">
+            <input id="skipDuplicates" type="checkbox" checked />
+            跳过重复文件
+          </label>
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+          <div>点击“选择图片”或把截图拖到这里</div>
+          <small>会根据文件名和文件大小提示是否已经上传过</small>
+        </div>
+
+        <div class="upload-list" id="uploadList"></div>
+      </section>
+    </main>
+
+    <script src="/upload.js"></script>
+  </body>
+</html>

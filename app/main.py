@@ -137,6 +137,15 @@ class ImagePatch(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class DuplicateCandidate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    size: int = Field(ge=0)
+
+
+class DuplicateCheckIn(BaseModel):
+    files: list[DuplicateCandidate]
+
+
 class SettingsPatch(BaseModel):
     metapi_base_url: str = ""
     metapi_model: str = ""
@@ -207,6 +216,23 @@ def attach_image_urls(image: dict[str, Any], tags: list[str] | None = None) -> d
     image["thumb_url"] = f"/thumbs/{image['thumb_filename']}"
     image["tags"] = tags or []
     return image
+
+
+def find_duplicate_image(conn: sqlite3.Connection, original_name: str, size: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM images
+        WHERE lower(original_name) = lower(?) AND size = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (original_name, size),
+    ).fetchone()
+    if not row:
+        return None
+    image = dict(row)
+    return attach_image_urls(image, get_image_tags(conn, image["id"]))
 
 
 def set_image_tags(conn: sqlite3.Connection, image_id: int, tags: list[str]) -> None:
@@ -304,6 +330,22 @@ def delete_category(category_id: int) -> dict[str, Any]:
         return {"ok": True}
 
 
+@app.post("/api/images/check-duplicates")
+def check_image_duplicates(payload: DuplicateCheckIn) -> dict[str, Any]:
+    with db() as conn:
+        items = []
+        for candidate in payload.files:
+            duplicate = find_duplicate_image(conn, candidate.name, candidate.size)
+            items.append(
+                {
+                    "name": candidate.name,
+                    "size": candidate.size,
+                    "duplicate": duplicate,
+                }
+            )
+        return {"items": items}
+
+
 @app.post("/api/images/upload")
 async def upload_images(
     files: list[UploadFile] = File(...),
@@ -328,6 +370,7 @@ async def upload_images(
             with target.open("wb") as out:
                 shutil.copyfileobj(file.file, out)
             size = target.stat().st_size
+            duplicate = find_duplicate_image(conn, original_name, size)
             try:
                 width, height = save_thumbnail(target, thumb)
             except Exception as exc:
@@ -359,7 +402,9 @@ async def upload_images(
                 ),
             )
             row = conn.execute("SELECT * FROM images WHERE id = ?", (cur.lastrowid,)).fetchone()
-            created.append(attach_image_urls(dict(row)))
+            created_image = attach_image_urls(dict(row))
+            created_image["duplicate"] = duplicate
+            created.append(created_image)
     return {"ok": True, "images": created}
 
 
