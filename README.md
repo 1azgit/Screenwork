@@ -60,11 +60,13 @@ cp .env.example .env
 Common values:
 
 ```env
-METAPI_BASE_URL=http://127.0.0.1:3000
+METAPI_BASE_URL=http://host.docker.internal:3000
 METAPI_MODEL=gpt-4o-mini
 METAPI_PROVIDER=openai
 METAPI_API_KEY=
 ```
+
+When Screenwork runs inside Docker and Metapi runs directly on the same Linux host, use `host.docker.internal` instead of `127.0.0.1`.
 
 `METAPI_PROVIDER` supports:
 
