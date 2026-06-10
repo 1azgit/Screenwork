@@ -1,4 +1,5 @@
 const filesState = [];
+let fileIdSeq = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +28,14 @@ function escapeHtml(value) {
   }[char]));
 }
 
+function createFileId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  fileIdSeq += 1;
+  return `${Date.now()}-${fileIdSeq}-${Math.random().toString(36).slice(2)}`;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -50,7 +59,7 @@ async function chooseFiles(fileList) {
   for (const file of fileList) {
     if (file.type === "image/png" || file.name.toLowerCase().endsWith(".png")) {
       filesState.push({
-        id: crypto.randomUUID(),
+        id: createFileId(),
         file,
         status: "waiting",
         loaded: 0,

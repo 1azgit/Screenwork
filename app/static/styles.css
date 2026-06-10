@@ -63,6 +63,20 @@ body {
   color: var(--danger);
 }
 
+.upload-choose {
+  position: relative;
+  overflow: hidden;
+}
+
+.file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .small-button {
   width: 28px;
   height: 28px;
