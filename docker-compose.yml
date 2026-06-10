@@ -1,0 +1,15 @@
+services:
+  screenwork:
+    build: .
+    container_name: screenwork
+    restart: unless-stopped
+    ports:
+      - "26633:26633"
+    environment:
+      SCREENWORK_DATA_DIR: /app/data
+      METAPI_BASE_URL: ${METAPI_BASE_URL:-}
+      METAPI_MODEL: ${METAPI_MODEL:-gpt-4o-mini}
+      METAPI_PROVIDER: ${METAPI_PROVIDER:-openai}
+      METAPI_API_KEY: ${METAPI_API_KEY:-}
+    volumes:
+      - ./data:/app/data

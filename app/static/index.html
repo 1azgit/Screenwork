@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Screenwork</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Screenwork</div>
+      <label class="button primary">
+        上传
+        <input id="uploadInput" type="file" accept="image/*" multiple hidden />
+      </label>
+      <select id="statusFilter" class="control" aria-label="状态">
+        <option value="">全部状态</option>
+        <option value="new">新截图</option>
+        <option value="reviewing">整理中</option>
+        <option value="ready">可开发</option>
+        <option value="done">已完成</option>
+      </select>
+      <button id="settingsButton" class="button ghost">设置</button>
+      <div id="statusText" class="status">就绪</div>
+    </header>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <strong>分类</strong>
+          <button id="newRootButton" class="small-button">+</button>
+        </div>
+        <div id="categoryTree" class="tree"></div>
+      </aside>
+
+      <section class="content">
+        <div class="toolbar">
+          <input id="searchInput" class="control search" placeholder="搜索标题、内容" />
+          <input id="tagFilter" class="control" placeholder="TAG" />
+          <button id="refreshButton" class="button">刷新</button>
+          <button id="exportButton" class="button">导出选中</button>
+        </div>
+
+        <div class="workarea">
+          <div id="imageGrid" class="image-grid"></div>
+
+          <article id="detailPanel" class="detail empty">
+            <div class="empty-state">选择一张截图开始整理</div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="settingsDialog" class="modal">
+      <form method="dialog" class="modal-body">
+        <h2>设置</h2>
+        <label>Metapi 地址<input id="metapiBaseUrl" class="control" placeholder="http://127.0.0.1:3000" /></label>
+        <label>模型名<input id="metapiModel" class="control" placeholder="gpt-4o-mini" /></label>
+        <label>接口类型
+          <select id="metapiProvider" class="control">
+            <option value="openai">OpenAI Compatible</option>
+            <option value="claude">Claude Compatible</option>
+          </select>
+        </label>
+        <label>API Key<input id="metapiApiKey" class="control" type="password" placeholder="留空则使用环境变量" /></label>
+        <div class="modal-actions">
+          <button id="saveSettingsButton" class="button primary" value="default">保存</button>
+          <button class="button" value="cancel">关闭</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
