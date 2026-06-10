@@ -47,7 +47,18 @@
         <div class="toolbar">
           <input id="searchInput" class="control search" placeholder="搜索标题、内容" />
           <input id="tagFilter" class="control" placeholder="TAG" />
+          <select id="timeSort" class="control compact-control" aria-label="时间排序">
+            <option value="newest">最新优先</option>
+            <option value="oldest">最早优先</option>
+          </select>
+          <label class="inline-check toolbar-check">
+            <input id="noContentFilter" type="checkbox" />
+            无内容
+          </label>
           <button id="refreshButton" class="button">刷新</button>
+          <button id="selectAllButton" class="button">全选当前</button>
+          <button id="clearSelectionButton" class="button">取消选择</button>
+          <button id="batchEditButton" class="button">批量编辑</button>
           <button id="exportButton" class="button">导出选中</button>
         </div>
 

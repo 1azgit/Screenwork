@@ -177,6 +177,15 @@ body {
   max-width: 360px;
 }
 
+.compact-control {
+  max-width: 130px;
+}
+
+.toolbar-check {
+  min-height: 38px;
+  padding: 0 8px;
+}
+
 .workarea {
   display: grid;
   grid-template-columns: minmax(320px, 1fr) 360px;
@@ -358,6 +367,16 @@ textarea.control {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.batch-form {
+  display: grid;
+  gap: 10px;
+}
+
+.batch-form h2 {
+  margin: 0;
+  font-size: 18px;
 }
 
 .modal {
@@ -590,6 +609,10 @@ textarea.control {
 
   .toolbar {
     flex-wrap: wrap;
+  }
+
+  .compact-control {
+    max-width: none;
   }
 
   .upload-topbar {

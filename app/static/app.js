@@ -140,6 +140,8 @@ async function loadImages() {
   if ($("statusFilter").value) params.set("status", $("statusFilter").value);
   if ($("searchInput").value.trim()) params.set("q", $("searchInput").value.trim());
   if ($("tagFilter").value.trim()) params.set("tag", $("tagFilter").value.trim().toLowerCase());
+  if ($("timeSort").value) params.set("sort", $("timeSort").value);
+  if ($("noContentFilter").checked) params.set("no_content", "true");
   const data = await api(`/api/images?${params.toString()}`);
   state.images = data.items;
   renderImages();
@@ -266,6 +268,84 @@ async function uploadSelected(files) {
     setStatus(error.message);
   } finally {
     $("uploadInput").value = "";
+  }
+}
+
+function selectAllCurrentImages() {
+  for (const image of state.images) state.selectedIds.add(image.id);
+  renderImages();
+  setStatus(`已选择 ${state.selectedIds.size} 张`);
+}
+
+function clearImageSelection() {
+  state.selectedIds.clear();
+  renderImages();
+  setStatus("已取消选择");
+}
+
+function openBatchEditor() {
+  if (!state.selectedIds.size) {
+    setStatus("先选择图片");
+    return;
+  }
+  const panel = $("detailPanel");
+  const categoryOptions = ['<option value="">未分类</option>']
+    .concat(
+      flattenCategories(state.categories).map((category) => {
+        const prefix = "　".repeat(category.depth - 1);
+        return `<option value="${category.id}">${prefix}${escapeHtml(category.name)}</option>`;
+      })
+    )
+    .join("");
+  panel.className = "detail";
+  panel.innerHTML = `
+    <form id="batchForm" class="batch-form">
+      <h2>批量编辑 ${state.selectedIds.size} 张</h2>
+      <label class="inline-check"><input id="applyTitle" type="checkbox" /> 标题</label>
+      <input id="batchTitle" class="control" placeholder="批量设置标题" />
+
+      <label class="inline-check"><input id="applyCategory" type="checkbox" /> 分类</label>
+      <select id="batchCategory" class="control">${categoryOptions}</select>
+
+      <label class="inline-check"><input id="applyTags" type="checkbox" /> TAG</label>
+      <input id="batchTags" class="control" placeholder="tag1, tag2" />
+      <select id="batchTagMode" class="control">
+        <option value="append">追加 TAG</option>
+        <option value="replace">替换 TAG</option>
+      </select>
+
+      <label class="inline-check"><input id="applyNote" type="checkbox" /> 内容</label>
+      <textarea id="batchNote" class="control" placeholder="批量设置或追加内容"></textarea>
+      <select id="batchNoteMode" class="control">
+        <option value="append">追加内容</option>
+        <option value="replace">替换内容</option>
+      </select>
+
+      <button class="button primary" type="submit">应用到选中图片</button>
+    </form>
+  `;
+  $("batchForm").onsubmit = submitBatchEdit;
+}
+
+async function submitBatchEdit(event) {
+  event.preventDefault();
+  const payload = { ids: [...state.selectedIds] };
+  if ($("applyTitle").checked) payload.title = $("batchTitle").value;
+  if ($("applyCategory").checked) payload.category_id = $("batchCategory").value ? Number($("batchCategory").value) : null;
+  if ($("applyTags").checked) {
+    payload.tags = $("batchTags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    payload.tag_mode = $("batchTagMode").value;
+  }
+  if ($("applyNote").checked) {
+    payload.note = $("batchNote").value;
+    payload.note_mode = $("batchNoteMode").value;
+  }
+  try {
+    const result = await api("/api/images-bulk", { method: "PATCH", body: JSON.stringify(payload) });
+    await loadImages();
+    setStatus(`批量更新 ${result.updated} 张`);
+  } catch (error) {
+    setStatus(error.message);
   }
 }
 
@@ -568,10 +648,15 @@ $("uploadInput").onchange = (event) => uploadSelected(event.target.files);
 $("newRootButton").onclick = () => createCategory(null);
 $("newWorkButton").onclick = startNewWorkGroup;
 $("refreshButton").onclick = loadImages;
+$("selectAllButton").onclick = selectAllCurrentImages;
+$("clearSelectionButton").onclick = clearImageSelection;
+$("batchEditButton").onclick = openBatchEditor;
 $("exportButton").onclick = exportSelected;
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
 $("statusFilter").onchange = loadImages;
+$("timeSort").onchange = loadImages;
+$("noContentFilter").onchange = loadImages;
 $("searchInput").oninput = debounce(loadImages);
 $("tagFilter").oninput = debounce(loadImages);
 

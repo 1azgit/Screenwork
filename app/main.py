@@ -159,6 +159,16 @@ class ImagePatch(BaseModel):
     tags: Optional[list[str]] = None
 
 
+class BulkImagePatch(BaseModel):
+    ids: list[int] = Field(min_length=1)
+    title: Optional[str] = None
+    note: Optional[str] = None
+    note_mode: str = "replace"
+    category_id: Optional[int] = None
+    tags: Optional[list[str]] = None
+    tag_mode: str = "replace"
+
+
 class DuplicateCandidate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     size: int = Field(ge=0)
@@ -515,6 +525,8 @@ def list_images(
     status: str = "",
     tag: str = "",
     q: str = "",
+    sort: str = "newest",
+    no_content: bool = False,
     page: int = 1,
     page_size: int = 60,
 ) -> dict[str, Any]:
@@ -533,11 +545,14 @@ def list_images(
         where.append("(i.title LIKE ? OR i.note LIKE ? OR i.expanded_note LIKE ?)")
         like = f"%{q}%"
         params.extend([like, like, like])
+    if no_content:
+        where.append("trim(i.note) = '' AND trim(i.expanded_note) = ''")
     if tag:
         join = "JOIN image_tags it ON it.image_id = i.id JOIN tags t ON t.id = it.tag_id"
         where.append("t.name = ?")
         params.append(tag.strip().lower())
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    order_sql = "i.created_at ASC" if sort == "oldest" else "i.created_at DESC"
     offset = (page - 1) * page_size
     with db() as conn:
         rows = conn.execute(
@@ -546,7 +561,7 @@ def list_images(
             FROM images i
             {join}
             {where_sql}
-            ORDER BY i.created_at DESC
+            ORDER BY {order_sql}
             LIMIT ? OFFSET ?
             """,
             (*params, page_size, offset),
@@ -594,6 +609,48 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
             set_image_tags(conn, image_id, payload.tags)
         updated = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
         return attach_image_urls(dict(updated), get_image_tags(conn, image_id))
+
+
+@app.patch("/api/images-bulk")
+def bulk_update_images(payload: BulkImagePatch) -> dict[str, Any]:
+    fields = payload.model_fields_set
+    if payload.note_mode not in {"replace", "append"}:
+        raise HTTPException(status_code=400, detail="Invalid note_mode")
+    if payload.tag_mode not in {"replace", "append"}:
+        raise HTTPException(status_code=400, detail="Invalid tag_mode")
+    with db() as conn:
+        if "category_id" in fields and payload.category_id is not None:
+            get_category_depth(conn, payload.category_id)
+        changed = 0
+        for image_id in payload.ids:
+            row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+            if not row:
+                continue
+            updates = []
+            params: list[Any] = []
+            if "title" in fields and payload.title is not None:
+                updates.append("title = ?")
+                params.append(payload.title)
+            if "category_id" in fields:
+                updates.append("category_id = ?")
+                params.append(payload.category_id)
+            if "note" in fields and payload.note is not None:
+                next_note = payload.note
+                if payload.note_mode == "append" and row["note"]:
+                    next_note = f"{row['note']}\n{payload.note}"
+                updates.append("note = ?")
+                params.append(next_note)
+            if updates:
+                updates.append("updated_at = ?")
+                params.extend([now_iso(), image_id])
+                conn.execute(f"UPDATE images SET {', '.join(updates)} WHERE id = ?", params)
+            if payload.tags is not None:
+                tags = normalize_tags(payload.tags)
+                if payload.tag_mode == "append":
+                    tags = normalize_tags([*get_image_tags(conn, image_id), *tags])
+                set_image_tags(conn, image_id, tags)
+            changed += 1
+        return {"ok": True, "updated": changed}
 
 
 @app.post("/api/images/{image_id}/expand")
