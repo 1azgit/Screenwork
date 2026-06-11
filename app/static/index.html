@@ -73,6 +73,19 @@
       </section>
     </main>
 
+    <div id="imageLightbox" class="lightbox" hidden>
+      <div class="lightbox-toolbar">
+        <a id="lightboxDownload" class="button primary" href="#" download>下载</a>
+        <a id="lightboxOriginal" class="button" href="#" target="_blank" rel="noreferrer">原始图片</a>
+        <button id="lightboxInfoButton" class="button" type="button">图片信息</button>
+        <button id="lightboxClose" class="button" type="button">关闭</button>
+      </div>
+      <div id="lightboxStage" class="lightbox-stage">
+        <img id="lightboxImage" alt="" />
+      </div>
+      <aside id="lightboxInfo" class="lightbox-info" hidden></aside>
+    </div>
+
     <dialog id="settingsDialog" class="modal">
       <form method="dialog" class="modal-body">
         <h2>设置</h2>

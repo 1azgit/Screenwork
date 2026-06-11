@@ -20,6 +20,10 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+body.lightbox-open {
+  overflow: hidden;
+}
+
 .topbar {
   display: grid;
   grid-template-columns: auto auto auto minmax(120px, 180px) auto 1fr;
@@ -330,6 +334,102 @@ body {
   border: 1px solid var(--accent);
   background: rgba(15, 118, 110, 0.14);
   pointer-events: none;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: rgba(7, 12, 18, 0.9);
+  color: #f8fafc;
+}
+
+.lightbox[hidden] {
+  display: none;
+}
+
+.lightbox-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px;
+  position: relative;
+  z-index: 2;
+}
+
+.lightbox-toolbar .button {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #f8fafc;
+}
+
+.lightbox-stage {
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.lightbox-stage img {
+  max-width: 94vw;
+  max-height: calc(100vh - 92px);
+  object-fit: contain;
+  cursor: zoom-in;
+  transform-origin: center;
+  transition: transform 80ms linear;
+  user-select: none;
+}
+
+.lightbox-info {
+  position: fixed;
+  right: 12px;
+  top: 62px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100vh - 84px);
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  box-shadow: var(--shadow);
+}
+
+.lightbox-info[hidden] {
+  display: none;
+}
+
+.lightbox-info h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.lightbox-info dl {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.lightbox-info dt {
+  color: var(--muted);
+}
+
+.lightbox-info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lightbox-info p {
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
 }
 
 .work-actions {

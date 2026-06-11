@@ -8,6 +8,11 @@ const state = {
   searchTokens: [],
   mode: "images",
   workPicker: null,
+  lightbox: {
+    image: null,
+    zoom: 1,
+    infoVisible: false,
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -223,6 +228,10 @@ function renderImages() {
       else state.selectedIds.delete(image.id);
       renderImages();
     };
+    card.querySelector("img").onclick = (event) => {
+      event.stopPropagation();
+      openLightbox(image);
+    };
     grid.appendChild(card);
   }
 }
@@ -247,7 +256,7 @@ function renderDetail(image) {
     .join("");
   panel.className = "detail";
   panel.innerHTML = `
-    <img src="${image.image_url}" alt="${escapeHtml(image.title)}" />
+    <img class="detail-image" src="${image.image_url}" alt="${escapeHtml(image.title)}" />
     <form id="detailForm">
       <label>标题<input id="detailTitle" class="control" value="${escapeAttr(image.title)}" /></label>
       <label>分类<select id="detailCategory" class="control">${categoryOptions}</select></label>
@@ -269,6 +278,7 @@ function renderDetail(image) {
     event.preventDefault();
     await saveDetail(image.id);
   };
+  panel.querySelector(".detail-image").onclick = () => openLightbox(image);
   $("expandButton").onclick = async () => expandNote(image.id);
 }
 
@@ -542,6 +552,10 @@ function renderWorkPicker() {
       toggleWorkImage(image.id);
       renderWorkPicker();
     };
+    card.querySelector("img").onclick = (event) => {
+      event.stopPropagation();
+      openLightbox(image);
+    };
     grid.appendChild(card);
   }
   setupDragSelection(grid);
@@ -634,6 +648,7 @@ function renderWorkGroupDetail(group) {
         <div class="note-line">${escapeHtml(image.note || image.expanded_note || "")}</div>
       </div>
     `;
+    card.querySelector("img").onclick = () => openLightbox(image);
     grid.appendChild(card);
   }
   const first = group.images?.[0];
@@ -654,6 +669,10 @@ function renderWorkGroupDetail(group) {
       </div>
     </section>
   `;
+  if (first) panel.querySelector(".work-large").onclick = () => openLightbox(first);
+  for (const [index, thumb] of panel.querySelectorAll(".work-thumbs img").entries()) {
+    thumb.onclick = () => openLightbox(rest[index]);
+  }
   $("saveWorkNotes").onclick = async () => {
     const updated = await api(`/api/work-groups/${group.id}`, {
       method: "PATCH",
@@ -694,6 +713,90 @@ async function saveSettings(event) {
   }
 }
 
+function openLightbox(image) {
+  state.lightbox.image = image;
+  state.lightbox.zoom = 1;
+  state.lightbox.infoVisible = false;
+
+  const title = image.title || image.original_name || "截图";
+  const lightbox = $("imageLightbox");
+  const img = $("lightboxImage");
+  img.src = image.image_url;
+  img.alt = title;
+  img.style.transform = "scale(1)";
+  img.style.cursor = "zoom-in";
+
+  $("lightboxDownload").href = image.image_url;
+  $("lightboxDownload").download = downloadName(image);
+  $("lightboxOriginal").href = image.image_url;
+  renderLightboxInfo();
+  $("lightboxInfo").hidden = true;
+  lightbox.hidden = false;
+  document.body.classList.add("lightbox-open");
+}
+
+function closeLightbox() {
+  $("imageLightbox").hidden = true;
+  $("lightboxImage").src = "";
+  $("lightboxInfo").hidden = true;
+  state.lightbox.image = null;
+  state.lightbox.zoom = 1;
+  state.lightbox.infoVisible = false;
+  document.body.classList.remove("lightbox-open");
+}
+
+function toggleLightboxInfo() {
+  if (!state.lightbox.image) return;
+  state.lightbox.infoVisible = !state.lightbox.infoVisible;
+  $("lightboxInfo").hidden = !state.lightbox.infoVisible;
+}
+
+function renderLightboxInfo() {
+  const image = state.lightbox.image;
+  if (!image) return;
+  const tags = (image.tags || []).join(", ") || "无";
+  const dimensions = image.width && image.height ? `${image.width} × ${image.height}` : "未知";
+  $("lightboxInfo").innerHTML = `
+    <h2>${escapeHtml(image.title || image.original_name || "截图")}</h2>
+    <dl>
+      <dt>文件名</dt><dd>${escapeHtml(image.original_name || image.filename || "")}</dd>
+      <dt>状态</dt><dd>${escapeHtml(image.status || "")}</dd>
+      <dt>尺寸</dt><dd>${escapeHtml(dimensions)}</dd>
+      <dt>大小</dt><dd>${escapeHtml(formatBytes(image.size || 0))}</dd>
+      <dt>原始大小</dt><dd>${escapeHtml(formatBytes(image.source_size || 0))}</dd>
+      <dt>TAG</dt><dd>${escapeHtml(tags)}</dd>
+    </dl>
+    <p>${escapeHtml(image.note || image.expanded_note || "没有内容标注")}</p>
+  `;
+}
+
+function zoomLightbox(event) {
+  if (!state.lightbox.image) return;
+  event.preventDefault();
+  const delta = event.deltaY < 0 ? 0.15 : -0.15;
+  state.lightbox.zoom = Math.min(5, Math.max(0.4, state.lightbox.zoom + delta));
+  $("lightboxImage").style.transform = `scale(${state.lightbox.zoom})`;
+  $("lightboxImage").style.cursor = state.lightbox.zoom > 1 ? "zoom-out" : "zoom-in";
+}
+
+function handleLightboxKeydown(event) {
+  if (event.key === "Escape" && !$("imageLightbox").hidden) {
+    closeLightbox();
+  }
+}
+
+function downloadName(image) {
+  const name = image.title || image.original_name || image.filename || "screenwork-image";
+  return `${name.replace(/[\\/:*?"<>|]+/g, "_").replace(/\.(png|jpg|jpeg|webp)$/i, "")}.jpg`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** power).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -730,5 +833,11 @@ $("timeSort").onchange = loadImages;
 $("noContentFilter").onchange = loadImages;
 $("searchInput").oninput = handleSearchInput;
 $("searchInput").onkeydown = handleSearchKeydown;
+$("lightboxClose").onclick = closeLightbox;
+$("lightboxInfoButton").onclick = toggleLightboxInfo;
+$("lightboxImage").onwheel = zoomLightbox;
+$("lightboxImage").onclick = (event) => event.stopPropagation();
+$("lightboxStage").onclick = closeLightbox;
+document.addEventListener("keydown", handleLightboxKeydown);
 
 Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));
