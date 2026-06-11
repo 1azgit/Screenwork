@@ -225,6 +225,7 @@ function renderImages() {
           <span>${escapeHtml(image.status)}</span>
           <span>${renderPriorityBadges(image)}</span>
         </div>
+        ${image.ai_status ? `<div class="muted-line">AI：${escapeHtml(image.ai_status)}</div>` : ""}
         <div class="card-select">
           <label><input type="checkbox" ${checked} /> 选择</label>
         </div>
@@ -277,11 +278,13 @@ function renderDetail(image) {
         <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
         星标 / 收藏
       </label>
+      <div class="muted-line">AI 状态：${escapeHtml(image.ai_status || "未识别")}${image.ai_error ? ` / ${escapeHtml(image.ai_error)}` : ""}</div>
       <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
       <label>内容<textarea id="detailNote" class="control">${escapeHtml(image.note || "")}</textarea></label>
       <label>AI 扩写<textarea id="detailExpanded" class="control">${escapeHtml(image.expanded_note || "")}</textarea></label>
       <div class="actions">
         <button class="button primary" type="submit">保存</button>
+        <button id="organizeButton" class="button" type="button">AI 识别</button>
         <button id="expandButton" class="button" type="button">AI 扩写</button>
       </div>
     </form>
@@ -291,6 +294,7 @@ function renderDetail(image) {
     await saveDetail(image.id);
   };
   panel.querySelector(".detail-image").onclick = () => openLightbox(image);
+  $("organizeButton").onclick = async () => organizeImage(image.id);
   $("expandButton").onclick = async () => expandNote(image.id);
 }
 
@@ -324,6 +328,40 @@ async function expandNote(id) {
     setStatus("AI 扩写完成");
   } catch (error) {
     setStatus(error.message);
+  }
+}
+
+async function organizeImage(id) {
+  setStatus("正在 AI 识别");
+  try {
+    const image = await api(`/api/images/${id}/organize`, { method: "POST", body: JSON.stringify({}) });
+    renderDetail(image);
+    await loadImages();
+    setStatus("AI 识别完成");
+  } catch (error) {
+    setStatus(error.message);
+    await loadImages();
+  }
+}
+
+async function organizeSelectedImages() {
+  if (!state.selectedIds.size) {
+    setStatus("先选择图片");
+    return;
+  }
+  const count = state.selectedIds.size;
+  if (!confirm(`确定用 AI 整理 ${count} 张图片？`)) return;
+  setStatus(`正在 AI 整理 ${count} 张`);
+  try {
+    const result = await api("/api/images-organize", {
+      method: "POST",
+      body: JSON.stringify({ ids: [...state.selectedIds] }),
+    });
+    await loadImages();
+    setStatus(result.errors.length ? `完成 ${result.updated} 张，失败 ${result.errors.length} 张` : `AI 整理完成 ${result.updated} 张`);
+  } catch (error) {
+    setStatus(error.message);
+    await loadImages();
   }
 }
 
@@ -691,6 +729,8 @@ function renderWorkGroupDetail(group) {
       星标 / 收藏
     </label>
     <label>备注<textarea id="workDetailNotes" class="control">${escapeHtml(group.notes || "")}</textarea></label>
+    <label>AI 开发方案<textarea id="workAiPlan" class="control plan-textarea">${escapeHtml(group.ai_plan || "")}</textarea></label>
+    <button id="generateWorkPlan" class="button" type="button">AI生成开发方案</button>
     <button id="saveWorkNotes" class="button primary">保存工作组</button>
     <section class="work-display">
       ${first ? `<img class="work-large" src="${first.image_url}" alt="${escapeHtml(first.title || first.original_name)}" />` : '<div class="empty-state">没有照片</div>'}
@@ -708,6 +748,7 @@ function renderWorkGroupDetail(group) {
       method: "PATCH",
       body: JSON.stringify({
         notes: $("workDetailNotes").value,
+        ai_plan: $("workAiPlan").value,
         priority: $("workDetailPriority").value,
         starred: $("workDetailStarred").checked,
       }),
@@ -716,7 +757,20 @@ function renderWorkGroupDetail(group) {
     await loadWorkGroups();
     setStatus("备注已保存");
   };
+  $("generateWorkPlan").onclick = async () => generateWorkPlan(group.id);
   setStatus(`工作项目：${group.title}`);
+}
+
+async function generateWorkPlan(groupId) {
+  setStatus("正在生成开发方案");
+  try {
+    const group = await api(`/api/work-groups/${groupId}/plan`, { method: "POST", body: JSON.stringify({}) });
+    renderWorkGroupDetail(group);
+    await loadWorkGroups();
+    setStatus("开发方案已生成");
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 async function openSettings() {
@@ -875,6 +929,7 @@ $("newWorkButton").onclick = startNewWorkGroup;
 $("refreshButton").onclick = loadImages;
 $("cancelSelectionButton").onclick = clearImageSelection;
 $("deleteSelectedButton").onclick = deleteSelectedImages;
+$("organizeSelectedButton").onclick = organizeSelectedImages;
 $("exportButton").onclick = exportSelected;
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;

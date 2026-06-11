@@ -1,4 +1,5 @@
 import csv
+import base64
 import io
 import json
 import os
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -92,6 +93,8 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'new',
                 priority TEXT NOT NULL DEFAULT '',
                 starred INTEGER NOT NULL DEFAULT 0,
+                ai_status TEXT NOT NULL DEFAULT '',
+                ai_error TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -121,6 +124,7 @@ def init_db() -> None:
                 combined_group_ids_json TEXT NOT NULL DEFAULT '[]',
                 priority TEXT NOT NULL DEFAULT '',
                 starred INTEGER NOT NULL DEFAULT 0,
+                ai_plan TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -140,12 +144,18 @@ def init_db() -> None:
             conn.execute("ALTER TABLE images ADD COLUMN priority TEXT NOT NULL DEFAULT ''")
         if "starred" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+        if "ai_status" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN ai_status TEXT NOT NULL DEFAULT ''")
+        if "ai_error" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN ai_error TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
         work_columns = {row["name"] for row in conn.execute("PRAGMA table_info(work_groups)").fetchall()}
         if "priority" not in work_columns:
             conn.execute("ALTER TABLE work_groups ADD COLUMN priority TEXT NOT NULL DEFAULT ''")
         if "starred" not in work_columns:
             conn.execute("ALTER TABLE work_groups ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+        if "ai_plan" not in work_columns:
+            conn.execute("ALTER TABLE work_groups ADD COLUMN ai_plan TEXT NOT NULL DEFAULT ''")
 
 
 @app.on_event("startup")
@@ -223,6 +233,7 @@ class WorkGroupPatch(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=160)
     purpose: Optional[str] = None
     notes: Optional[str] = None
+    ai_plan: Optional[str] = None
     priority: Optional[str] = None
     starred: Optional[bool] = None
     tags: Optional[list[str]] = None
@@ -279,6 +290,164 @@ def normalize_priority(priority: str | None) -> str:
     if value not in PRIORITY_VALUES:
         raise HTTPException(status_code=400, detail="Invalid priority")
     return value
+
+
+def coerce_priority(priority: str | None) -> str:
+    value = (priority or "").strip()
+    return value if value in PRIORITY_VALUES else ""
+
+
+def get_metapi_headers(settings: dict[str, str]) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if settings["metapi_api_key"]:
+        headers["Authorization"] = f"Bearer {settings['metapi_api_key']}"
+    return headers
+
+
+def extract_metapi_content(provider: str, data: dict[str, Any]) -> str:
+    if provider == "claude":
+        return "".join(part.get("text", "") for part in data.get("content", []))
+    return data["choices"][0]["message"]["content"]
+
+
+def image_data_url(path: Path) -> str:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def extract_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            raise HTTPException(status_code=502, detail="AI response did not contain JSON")
+        return json.loads(match.group(0))
+
+
+async def call_metapi(
+    settings: dict[str, str],
+    prompt: str,
+    image_path: Path | None = None,
+    max_tokens: int = 1400,
+) -> str:
+    if not settings["metapi_base_url"]:
+        raise HTTPException(status_code=400, detail="Metapi base URL is not configured")
+    base_url = settings["metapi_base_url"].rstrip("/")
+    provider = settings["metapi_provider"].lower()
+    headers = get_metapi_headers(settings)
+
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            if provider == "claude":
+                content: Any
+                if image_path:
+                    content = [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": base64.b64encode(image_path.read_bytes()).decode("ascii"),
+                            },
+                        },
+                    ]
+                else:
+                    content = prompt
+                response = await client.post(
+                    f"{base_url}/v1/messages",
+                    headers={**headers, "anthropic-version": "2023-06-01"},
+                    json={
+                        "model": settings["metapi_model"],
+                        "max_tokens": max_tokens,
+                        "messages": [{"role": "user", "content": content}],
+                    },
+                )
+            else:
+                content = prompt
+                if image_path:
+                    content = [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url(image_path)}},
+                    ]
+                response = await client.post(
+                    f"{base_url}/v1/chat/completions",
+                    headers=headers,
+                    json={
+                        "model": settings["metapi_model"],
+                        "messages": [{"role": "user", "content": content}],
+                        "temperature": 0.35,
+                        "max_tokens": max_tokens,
+                    },
+                )
+            response.raise_for_status()
+            return extract_metapi_content(provider, response.json()).strip()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Metapi request failed: {exc}") from exc
+
+
+def set_image_ai_state(image_id: int, status: str, error: str = "") -> None:
+    with db() as conn:
+        conn.execute(
+            "UPDATE images SET ai_status = ?, ai_error = ?, updated_at = ? WHERE id = ?",
+            (status, error[:500], now_iso(), image_id),
+        )
+
+
+async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
+    settings = get_effective_settings()
+    set_image_ai_state(image_id, "识别中")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Image not found")
+        image = dict(row)
+        tags = get_image_tags(conn, image_id)
+
+    prompt = (
+        "你是截图内容识别和产品点子整理助手。请观察图片并结合已有信息，生成方便人工审核的结构化结果。\n"
+        "只返回 JSON，不要 Markdown，不要解释。JSON 字段必须是：\n"
+        "title: 20字以内标题；summary: 截图内容摘要；tags: 3-8个中文短标签数组；"
+        "idea: 可开发点子，包含用途、开发方向、下一步；priority: 只能是空字符串、高价值、待验证、可立即开发之一。\n\n"
+        f"原文件名: {image['original_name']}\n"
+        f"现有标题: {image['title']}\n现有内容: {image['note']}\n现有TAG: {', '.join(tags)}"
+    )
+    content = await call_metapi(settings, prompt, UPLOAD_DIR / image["filename"], max_tokens=1600)
+    data = extract_json_object(content)
+    title = str(data.get("title") or image["title"] or Path(image["original_name"]).stem)[:160]
+    summary = str(data.get("summary") or image["note"] or "")
+    idea = str(data.get("idea") or image["expanded_note"] or "")
+    priority = coerce_priority(str(data.get("priority") or ""))
+    raw_tags = data.get("tags") or tags
+    if not isinstance(raw_tags, list):
+        raw_tags = re.split(r"[,，、\s]+", str(raw_tags))
+    next_tags = normalize_tags([str(tag) for tag in raw_tags])
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE images
+            SET title = ?, note = ?, expanded_note = ?, priority = ?, ai_status = ?, ai_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (title, summary, idea, priority, "完成", "", now_iso(), image_id),
+        )
+        set_image_tags(conn, image_id, next_tags)
+        updated = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        return attach_image_urls(dict(updated), get_image_tags(conn, image_id))
+
+
+async def organize_image_background(image_id: int) -> None:
+    try:
+        await organize_image_with_ai(image_id)
+    except Exception as exc:
+        set_image_ai_state(image_id, "失败", str(exc))
 
 
 def get_image_tags(conn: sqlite3.Connection, image_id: int) -> list[str]:
@@ -493,10 +662,12 @@ def check_image_duplicates(payload: DuplicateCheckIn) -> dict[str, Any]:
 
 @app.post("/api/images/upload")
 async def upload_images(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     category_id: Optional[int] = Form(default=None),
 ) -> dict[str, Any]:
     created: list[dict[str, Any]] = []
+    auto_ai = bool(get_effective_settings()["metapi_base_url"])
     with db() as conn:
         if category_id is not None:
             get_category_depth(conn, category_id)
@@ -549,6 +720,10 @@ async def upload_images(
                 ),
             )
             row = conn.execute("SELECT * FROM images WHERE id = ?", (cur.lastrowid,)).fetchone()
+            if auto_ai:
+                conn.execute("UPDATE images SET ai_status = ? WHERE id = ?", ("排队", row["id"]))
+                row = conn.execute("SELECT * FROM images WHERE id = ?", (row["id"],)).fetchone()
+                background_tasks.add_task(organize_image_background, row["id"])
             created_image = attach_image_urls(dict(row))
             created_image["duplicate"] = duplicate
             created.append(created_image)
@@ -737,6 +912,25 @@ def delete_images(payload: ImageIdsIn) -> dict[str, Any]:
     return {"ok": True, "deleted": deleted}
 
 
+@app.post("/api/images/{image_id}/organize")
+async def organize_image(image_id: int) -> dict[str, Any]:
+    return await organize_image_with_ai(image_id)
+
+
+@app.post("/api/images-organize")
+async def organize_images(payload: ImageIdsIn) -> dict[str, Any]:
+    updated = 0
+    errors: list[dict[str, Any]] = []
+    for image_id in payload.ids:
+        try:
+            await organize_image_with_ai(image_id)
+            updated += 1
+        except Exception as exc:
+            set_image_ai_state(image_id, "失败", str(exc))
+            errors.append({"id": image_id, "error": str(exc)})
+    return {"ok": True, "updated": updated, "errors": errors}
+
+
 @app.post("/api/images/{image_id}/expand")
 async def expand_image_note(image_id: int) -> dict[str, Any]:
     settings = get_effective_settings()
@@ -861,7 +1055,7 @@ def update_work_group(group_id: int, payload: WorkGroupPatch) -> dict[str, Any]:
         fields = payload.model_fields_set
         updates = []
         params: list[Any] = []
-        for field in ("title", "purpose", "notes"):
+        for field in ("title", "purpose", "notes", "ai_plan"):
             if field in fields:
                 updates.append(f"{field} = ?")
                 params.append((getattr(payload, field) or "").strip())
@@ -883,6 +1077,46 @@ def update_work_group(group_id: int, payload: WorkGroupPatch) -> dict[str, Any]:
             conn.execute(f"UPDATE work_groups SET {', '.join(updates)} WHERE id = ?", params)
         if payload.image_ids is not None:
             replace_work_group_images(conn, group_id, payload.image_ids)
+        updated = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        return serialize_work_group(conn, updated, include_images=True)
+
+
+@app.post("/api/work-groups/{group_id}/plan")
+async def generate_work_group_plan(group_id: int) -> dict[str, Any]:
+    settings = get_effective_settings()
+    with db() as conn:
+        row = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Work group not found")
+        group = serialize_work_group(conn, row, include_images=True)
+    image_lines = []
+    for image in group.get("images", []):
+        image_lines.append(
+            "\n".join(
+                [
+                    f"- 标题: {image.get('title') or image.get('original_name')}",
+                    f"  TAG: {', '.join(image.get('tags') or [])}",
+                    f"  内容: {image.get('note') or ''}",
+                    f"  点子: {image.get('expanded_note') or ''}",
+                ]
+            )
+        )
+    prompt = (
+        "你是产品开发规划助手。基于工作组的截图、TAG、备注，生成一份可直接执行的中文开发方案。"
+        "请使用 Markdown，必须包含以下小节：产品/内容方向、功能拆解、MVP 版本、需要的素材、开发任务清单。\n\n"
+        f"工作组标题: {group['title']}\n"
+        f"目的: {group.get('purpose') or ''}\n"
+        f"备注: {group.get('notes') or ''}\n"
+        f"工作组TAG: {', '.join(group.get('tags') or [])}\n\n"
+        "图片资料:\n"
+        + "\n".join(image_lines)
+    )
+    plan = await call_metapi(settings, prompt, max_tokens=2400)
+    with db() as conn:
+        conn.execute(
+            "UPDATE work_groups SET ai_plan = ?, updated_at = ? WHERE id = ?",
+            (plan, now_iso(), group_id),
+        )
         updated = conn.execute("SELECT * FROM work_groups WHERE id = ?", (group_id,)).fetchone()
         return serialize_work_group(conn, updated, include_images=True)
 
