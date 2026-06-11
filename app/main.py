@@ -28,6 +28,7 @@ DB_PATH = Path(os.getenv("SCREENWORK_DB_PATH", DATA_DIR / "screenwork.db"))
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_EXTENSIONS = {".png"}
 MAX_CATEGORY_DEPTH = 3
+PRIORITY_VALUES = {"", "高价值", "待验证", "可立即开发"}
 
 
 app = FastAPI(title=APP_TITLE)
@@ -89,6 +90,8 @@ def init_db() -> None:
                 note TEXT NOT NULL DEFAULT '',
                 expanded_note TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'new',
+                priority TEXT NOT NULL DEFAULT '',
+                starred INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -116,6 +119,8 @@ def init_db() -> None:
                 notes TEXT NOT NULL DEFAULT '',
                 tags_json TEXT NOT NULL DEFAULT '[]',
                 combined_group_ids_json TEXT NOT NULL DEFAULT '[]',
+                priority TEXT NOT NULL DEFAULT '',
+                starred INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -131,7 +136,16 @@ def init_db() -> None:
         image_columns = {row["name"] for row in conn.execute("PRAGMA table_info(images)").fetchall()}
         if "source_size" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN source_size INTEGER")
+        if "priority" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN priority TEXT NOT NULL DEFAULT ''")
+        if "starred" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
+        work_columns = {row["name"] for row in conn.execute("PRAGMA table_info(work_groups)").fetchall()}
+        if "priority" not in work_columns:
+            conn.execute("ALTER TABLE work_groups ADD COLUMN priority TEXT NOT NULL DEFAULT ''")
+        if "starred" not in work_columns:
+            conn.execute("ALTER TABLE work_groups ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
 
 
 @app.on_event("startup")
@@ -156,6 +170,8 @@ class ImagePatch(BaseModel):
     note: Optional[str] = None
     expanded_note: Optional[str] = None
     status: Optional[str] = None
+    priority: Optional[str] = None
+    starred: Optional[bool] = None
     category_id: Optional[int] = None
     tags: Optional[list[str]] = None
 
@@ -166,6 +182,8 @@ class BulkImagePatch(BaseModel):
     note: Optional[str] = None
     note_mode: str = "replace"
     category_id: Optional[int] = None
+    priority: Optional[str] = None
+    starred: Optional[bool] = None
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
 
@@ -194,6 +212,8 @@ class WorkGroupIn(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     purpose: str = ""
     notes: str = ""
+    priority: str = ""
+    starred: bool = False
     tags: list[str] = []
     image_ids: list[int] = []
     combined_group_ids: list[int] = []
@@ -203,6 +223,8 @@ class WorkGroupPatch(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=160)
     purpose: Optional[str] = None
     notes: Optional[str] = None
+    priority: Optional[str] = None
+    starred: Optional[bool] = None
     tags: Optional[list[str]] = None
     image_ids: Optional[list[int]] = None
     combined_group_ids: Optional[list[int]] = None
@@ -252,6 +274,13 @@ def normalize_tags(tags: list[str] | None) -> list[str]:
     return cleaned
 
 
+def normalize_priority(priority: str | None) -> str:
+    value = (priority or "").strip()
+    if value not in PRIORITY_VALUES:
+        raise HTTPException(status_code=400, detail="Invalid priority")
+    return value
+
+
 def get_image_tags(conn: sqlite3.Connection, image_id: int) -> list[str]:
     rows = conn.execute(
         """
@@ -270,6 +299,7 @@ def attach_image_urls(image: dict[str, Any], tags: list[str] | None = None) -> d
     image["image_url"] = f"/uploads/{image['filename']}"
     image["thumb_url"] = f"/thumbs/{image['thumb_filename']}"
     image["tags"] = tags or []
+    image["starred"] = bool(image.get("starred", 0))
     return image
 
 
@@ -296,6 +326,7 @@ def serialize_work_group(
     include_images: bool = False,
 ) -> dict[str, Any]:
     group = dict(row)
+    group["starred"] = bool(group.get("starred", 0))
     group["tags"] = json.loads(group.pop("tags_json") or "[]")
     combined_ids = json.loads(group.pop("combined_group_ids_json") or "[]")
     group["combined_group_ids"] = combined_ids
@@ -528,6 +559,8 @@ async def upload_images(
 def list_images(
     category_id: Optional[int] = None,
     status: str = "",
+    priority: str = "",
+    starred: bool = False,
     tag: str = "",
     q: str = "",
     sort: str = "newest",
@@ -546,6 +579,11 @@ def list_images(
     if status:
         where.append("i.status = ?")
         params.append(status)
+    if priority:
+        where.append("i.priority = ?")
+        params.append(normalize_priority(priority))
+    if starred:
+        where.append("i.starred = 1")
     if q:
         for term in [part.strip().lower() for part in re.split(r"\s{2,}", q) if part.strip()]:
             like = f"%{term}%"
@@ -617,10 +655,15 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
             get_category_depth(conn, payload.category_id)
         updates = []
         params: list[Any] = []
-        for field in ("title", "note", "expanded_note", "status", "category_id"):
+        for field in ("title", "note", "expanded_note", "status", "priority", "starred", "category_id"):
             if field in fields:
                 updates.append(f"{field} = ?")
-                params.append(getattr(payload, field))
+                value = getattr(payload, field)
+                if field == "priority":
+                    value = normalize_priority(value)
+                elif field == "starred":
+                    value = 1 if value else 0
+                params.append(value)
         if updates:
             updates.append("updated_at = ?")
             params.extend([now_iso(), image_id])
@@ -654,6 +697,12 @@ def bulk_update_images(payload: BulkImagePatch) -> dict[str, Any]:
             if "category_id" in fields:
                 updates.append("category_id = ?")
                 params.append(payload.category_id)
+            if "priority" in fields:
+                updates.append("priority = ?")
+                params.append(normalize_priority(payload.priority))
+            if "starred" in fields:
+                updates.append("starred = ?")
+                params.append(1 if payload.starred else 0)
             if "note" in fields and payload.note is not None:
                 next_note = payload.note
                 if payload.note_mode == "append" and row["note"]:
@@ -772,14 +821,16 @@ def create_work_group(payload: WorkGroupIn) -> dict[str, Any]:
         cur = conn.execute(
             """
             INSERT INTO work_groups (
-                title, purpose, notes, tags_json, combined_group_ids_json, created_at, updated_at
+                title, purpose, notes, priority, starred, tags_json, combined_group_ids_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.title.strip(),
                 payload.purpose.strip(),
                 payload.notes.strip(),
+                normalize_priority(payload.priority),
+                1 if payload.starred else 0,
                 json.dumps(normalize_tags(payload.tags), ensure_ascii=False),
                 json.dumps(payload.combined_group_ids),
                 timestamp,
@@ -814,6 +865,12 @@ def update_work_group(group_id: int, payload: WorkGroupPatch) -> dict[str, Any]:
             if field in fields:
                 updates.append(f"{field} = ?")
                 params.append((getattr(payload, field) or "").strip())
+        if "priority" in fields:
+            updates.append("priority = ?")
+            params.append(normalize_priority(payload.priority))
+        if "starred" in fields:
+            updates.append("starred = ?")
+            params.append(1 if payload.starred else 0)
         if "tags" in fields:
             updates.append("tags_json = ?")
             params.append(json.dumps(normalize_tags(payload.tags), ensure_ascii=False))
@@ -865,6 +922,7 @@ def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
         images = []
         for row in rows:
             item = dict(row)
+            item["starred"] = bool(item.get("starred", 0))
             item["tags"] = get_image_tags(conn, item["id"])
             images.append(item)
 
@@ -874,7 +932,18 @@ def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
         csv_buffer = io.StringIO()
         writer = csv.DictWriter(
             csv_buffer,
-            fieldnames=["id", "original_name", "title", "note", "expanded_note", "status", "tags", "created_at"],
+            fieldnames=[
+                "id",
+                "original_name",
+                "title",
+                "note",
+                "expanded_note",
+                "status",
+                "priority",
+                "starred",
+                "tags",
+                "created_at",
+            ],
         )
         writer.writeheader()
         for image in images:
@@ -886,6 +955,8 @@ def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
                     "note": image["note"],
                     "expanded_note": image["expanded_note"],
                     "status": image["status"],
+                    "priority": image["priority"],
+                    "starred": "yes" if image["starred"] else "no",
                     "tags": ",".join(image["tags"]),
                     "created_at": image["created_at"],
                 }

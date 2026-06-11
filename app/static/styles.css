@@ -294,6 +294,10 @@ body.lightbox-open {
 }
 
 .card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
   color: var(--muted);
   font-size: 12px;
 }
@@ -308,6 +312,38 @@ body.lightbox-open {
   gap: 7px;
   align-items: center;
   font-weight: 700;
+}
+
+.form-check {
+  justify-content: flex-start;
+  color: var(--text);
+}
+
+.priority-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -4px 0 10px;
+}
+
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid #9ccac5;
+  background: #e8f3f1;
+  color: var(--accent-dark);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.priority-badge.starred {
+  border-color: #f5c451;
+  background: #fff8db;
+  color: #8a5a00;
 }
 
 .tag-line,

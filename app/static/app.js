@@ -15,6 +15,8 @@ const state = {
   },
 };
 
+const PRIORITIES = ["", "高价值", "待验证", "可立即开发"];
+
 const $ = (id) => document.getElementById(id);
 
 function setStatus(message) {
@@ -118,7 +120,7 @@ function renderWorkGroups() {
   for (const group of state.workGroups) {
     const button = document.createElement("button");
     button.className = "tree-button";
-    button.textContent = group.title;
+    button.innerHTML = `${group.starred ? "★ " : ""}${escapeHtml(group.title)} ${renderPriorityBadges(group)}`;
     button.onclick = () => openWorkGroup(group.id);
     root.appendChild(button);
   }
@@ -190,6 +192,8 @@ async function loadImages() {
   const params = new URLSearchParams();
   if (state.categoryId) params.set("category_id", state.categoryId);
   if ($("statusFilter").value) params.set("status", $("statusFilter").value);
+  if ($("priorityFilter").value) params.set("priority", $("priorityFilter").value);
+  if ($("starredFilter").checked) params.set("starred", "true");
   const queryTerms = [...state.searchTokens, $("searchInput").value.trim()].filter(Boolean);
   if (queryTerms.length) params.set("q", queryTerms.join("  "));
   if ($("timeSort").value) params.set("sort", $("timeSort").value);
@@ -217,7 +221,10 @@ function renderImages() {
       <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
       <div class="card-body">
         <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
-        <div class="card-meta">${escapeHtml(image.status)}</div>
+        <div class="card-meta">
+          <span>${escapeHtml(image.status)}</span>
+          <span>${renderPriorityBadges(image)}</span>
+        </div>
         <div class="card-select">
           <label><input type="checkbox" ${checked} /> 选择</label>
         </div>
@@ -265,6 +272,11 @@ function renderDetail(image) {
           ${["new", "reviewing", "ready", "done"].map((status) => `<option value="${status}" ${image.status === status ? "selected" : ""}>${status}</option>`).join("")}
         </select>
       </label>
+      <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
+      <label class="inline-check form-check">
+        <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
+        星标 / 收藏
+      </label>
       <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
       <label>内容<textarea id="detailNote" class="control">${escapeHtml(image.note || "")}</textarea></label>
       <label>AI 扩写<textarea id="detailExpanded" class="control">${escapeHtml(image.expanded_note || "")}</textarea></label>
@@ -288,6 +300,8 @@ async function saveDetail(id) {
     title: $("detailTitle").value,
     category_id: categoryValue ? Number(categoryValue) : null,
     status: $("detailStatus").value,
+    priority: $("detailPriority").value,
+    starred: $("detailStarred").checked,
     tags: $("detailTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
     note: $("detailNote").value,
     expanded_note: $("detailExpanded").value,
@@ -480,6 +494,11 @@ function renderWorkBuilder(tags) {
     <form id="workForm">
       <label>标题<input id="workTitle" class="control" placeholder="工作项目标题" required /></label>
       <label>工作目的<textarea id="workPurpose" class="control" placeholder="这组截图要解决什么问题"></textarea></label>
+      <label>优先级<select id="workPriority" class="control">${priorityOptions("")}</select></label>
+      <label class="inline-check form-check">
+        <input id="workStarred" type="checkbox" />
+        星标 / 收藏
+      </label>
       <label>TAG
         <select id="workTags" class="control" multiple size="${Math.min(Math.max(tags.length, 3), 8)}">${tagOptions}</select>
       </label>
@@ -617,6 +636,8 @@ async function saveWorkGroup(event) {
     title: $("workTitle").value,
     purpose: $("workPurpose").value,
     notes: $("workNotes").value,
+    priority: $("workPriority").value,
+    starred: $("workStarred").checked,
     tags: state.workPicker.tags,
     image_ids: [...state.workPicker.selectedIds],
     combined_group_ids: [...$("combinedGroups").selectedOptions].map((option) => Number(option.value)),
@@ -657,11 +678,20 @@ function renderWorkGroupDetail(group) {
   panel.className = "detail work-detail";
   panel.innerHTML = `
     <h2>${escapeHtml(group.title)}</h2>
+    <div class="priority-row">
+      ${group.starred ? '<span class="priority-badge starred">★ 星标</span>' : ""}
+      ${group.priority ? `<span class="priority-badge">${escapeHtml(group.priority)}</span>` : '<span class="muted-line">未设置优先级</span>'}
+    </div>
     <section class="work-section"><strong>目的</strong><p>${escapeHtml(group.purpose || "")}</p></section>
     <section class="work-section"><strong>组合工作组</strong><p>${escapeHtml((group.combined_groups || []).map((item) => item.title).join(", ") || "无")}</p></section>
     <section class="work-section"><strong>TAG</strong><p>${escapeHtml((group.tags || []).join(", "))}</p></section>
+    <label>优先级<select id="workDetailPriority" class="control">${priorityOptions(group.priority)}</select></label>
+    <label class="inline-check form-check">
+      <input id="workDetailStarred" type="checkbox" ${group.starred ? "checked" : ""} />
+      星标 / 收藏
+    </label>
     <label>备注<textarea id="workDetailNotes" class="control">${escapeHtml(group.notes || "")}</textarea></label>
-    <button id="saveWorkNotes" class="button primary">保存备注</button>
+    <button id="saveWorkNotes" class="button primary">保存工作组</button>
     <section class="work-display">
       ${first ? `<img class="work-large" src="${first.image_url}" alt="${escapeHtml(first.title || first.original_name)}" />` : '<div class="empty-state">没有照片</div>'}
       <div class="work-thumbs">
@@ -676,7 +706,11 @@ function renderWorkGroupDetail(group) {
   $("saveWorkNotes").onclick = async () => {
     const updated = await api(`/api/work-groups/${group.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ notes: $("workDetailNotes").value }),
+      body: JSON.stringify({
+        notes: $("workDetailNotes").value,
+        priority: $("workDetailPriority").value,
+        starred: $("workDetailStarred").checked,
+      }),
     });
     renderWorkGroupDetail(updated);
     await loadWorkGroups();
@@ -761,6 +795,8 @@ function renderLightboxInfo() {
     <dl>
       <dt>文件名</dt><dd>${escapeHtml(image.original_name || image.filename || "")}</dd>
       <dt>状态</dt><dd>${escapeHtml(image.status || "")}</dd>
+      <dt>星标</dt><dd>${image.starred ? "是" : "否"}</dd>
+      <dt>优先级</dt><dd>${escapeHtml(image.priority || "未设置")}</dd>
       <dt>尺寸</dt><dd>${escapeHtml(dimensions)}</dd>
       <dt>大小</dt><dd>${escapeHtml(formatBytes(image.size || 0))}</dd>
       <dt>原始大小</dt><dd>${escapeHtml(formatBytes(image.source_size || 0))}</dd>
@@ -797,6 +833,20 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 ** power).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
 }
 
+function priorityOptions(value = "") {
+  return PRIORITIES.map((priority) => {
+    const label = priority || "未设置";
+    return `<option value="${escapeAttr(priority)}" ${value === priority ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+function renderPriorityBadges(item) {
+  const badges = [];
+  if (item.starred) badges.push('<span class="priority-badge starred">★</span>');
+  if (item.priority) badges.push(`<span class="priority-badge">${escapeHtml(item.priority)}</span>`);
+  return badges.join("");
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
@@ -830,6 +880,8 @@ $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
 $("statusFilter").onchange = loadImages;
 $("timeSort").onchange = loadImages;
+$("priorityFilter").onchange = loadImages;
+$("starredFilter").onchange = loadImages;
 $("noContentFilter").onchange = loadImages;
 $("searchInput").oninput = handleSearchInput;
 $("searchInput").onkeydown = handleSearchKeydown;
