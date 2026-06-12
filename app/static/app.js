@@ -70,7 +70,7 @@ function renderCategories() {
   all.textContent = "全部截图";
   all.onclick = () => {
     state.mode = "images";
-    state.view = state.view === "image-board" ? "image-board" : "list";
+    state.view = ["image-board", "timeline"].includes(state.view) ? state.view : "list";
     state.categoryId = null;
     renderCategories();
     updateViewButtons();
@@ -89,7 +89,7 @@ function renderCategories() {
     button.textContent = node.name;
     button.onclick = () => {
       state.mode = "images";
-      state.view = state.view === "image-board" ? "image-board" : "list";
+      state.view = ["image-board", "timeline"].includes(state.view) ? state.view : "list";
       state.categoryId = node.id;
       renderCategories();
       updateViewButtons();
@@ -156,6 +156,7 @@ function setView(view) {
 function updateViewButtons() {
   $("listViewButton").classList.toggle("primary", state.view === "list");
   $("imageBoardButton").classList.toggle("primary", state.view === "image-board");
+  $("timelineViewButton").classList.toggle("primary", state.view === "timeline");
   $("workBoardButton").classList.toggle("primary", state.view === "work-board");
 }
 
@@ -265,6 +266,10 @@ async function loadImages() {
   const queryTerms = [...state.searchTokens, $("searchInput").value.trim()].filter(Boolean);
   if (queryTerms.length) params.set("q", queryTerms.join("  "));
   if ($("timeSort").value) params.set("sort", $("timeSort").value);
+  if (state.view === "timeline") {
+    params.set("timeline", "true");
+    params.set("page_size", "200");
+  }
   if ($("noContentFilter").checked) params.set("no_content", "true");
   const data = await api(`/api/images?${params.toString()}`);
   state.images = data.items;
@@ -274,6 +279,7 @@ async function loadImages() {
 
 function renderImageCollection() {
   if (state.view === "image-board") renderImageBoard();
+  else if (state.view === "timeline") renderTimeline();
   else renderImages();
 }
 
@@ -336,6 +342,52 @@ function renderImageBoard() {
   }
 }
 
+function renderTimeline() {
+  const grid = $("imageGrid");
+  grid.className = "timeline";
+  grid.innerHTML = "";
+  const images = [...state.images].sort((a, b) => {
+    const left = new Date(timelineTime(a)).getTime() || 0;
+    const right = new Date(timelineTime(b)).getTime() || 0;
+    return $("timeSort").value === "oldest" ? left - right : right - left;
+  });
+  if (!images.length) {
+    grid.innerHTML = '<div class="empty-state">没有时间线内容</div>';
+    return;
+  }
+  const groups = new Map();
+  for (const image of images) {
+    const key = timelineDateLabel(image);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(image);
+  }
+  for (const [label, items] of groups) {
+    const section = document.createElement("section");
+    section.className = "timeline-day";
+    section.innerHTML = `
+      <div class="timeline-head">
+        <h3>${escapeHtml(label)}</h3>
+        <span>${items.length} 张</span>
+      </div>
+      <div class="timeline-items"></div>
+    `;
+    const list = section.querySelector(".timeline-items");
+    for (const image of items) {
+      const item = document.createElement("div");
+      item.className = "timeline-item";
+      item.innerHTML = `
+        <div class="timeline-time">
+          <strong>${escapeHtml(timelineClockLabel(image))}</strong>
+          <span>${image.source_time ? "来源时间" : "上传时间"}</span>
+        </div>
+      `;
+      item.appendChild(createImageCard(image));
+      list.appendChild(item);
+    }
+    grid.appendChild(section);
+  }
+}
+
 async function selectImage(id) {
   state.selectedId = id;
   const image = await api(`/api/images/${id}`);
@@ -365,6 +417,7 @@ function renderDetail(image) {
           ${statusOptions(image.status)}
         </select>
       </label>
+      <label>来源时间<input id="detailSourceTime" class="control" type="datetime-local" value="${escapeAttr(toDateTimeLocalValue(image.source_time))}" /></label>
       <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
       <label class="inline-check form-check">
         <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
@@ -395,6 +448,7 @@ async function saveDetail(id) {
   const payload = {
     title: $("detailTitle").value,
     category_id: categoryValue ? Number(categoryValue) : null,
+    source_time: $("detailSourceTime").value,
     status: $("detailStatus").value,
     priority: $("detailPriority").value,
     starred: $("detailStarred").checked,
@@ -950,7 +1004,9 @@ function renderLightboxInfo() {
     <h2>${escapeHtml(image.title || image.original_name || "截图")}</h2>
     <dl>
       <dt>文件名</dt><dd>${escapeHtml(image.original_name || image.filename || "")}</dd>
-      <dt>状态</dt><dd>${escapeHtml(image.status || "")}</dd>
+      <dt>状态</dt><dd>${escapeHtml(statusLabel(image.status || "new"))}</dd>
+      <dt>上传时间</dt><dd>${escapeHtml(formatDateTime(image.created_at))}</dd>
+      <dt>来源时间</dt><dd>${escapeHtml(image.source_time ? formatDateTime(image.source_time) : "未填写")}</dd>
       <dt>星标</dt><dd>${image.starred ? "是" : "否"}</dd>
       <dt>优先级</dt><dd>${escapeHtml(image.priority || "未设置")}</dd>
       <dt>尺寸</dt><dd>${escapeHtml(dimensions)}</dd>
@@ -987,6 +1043,49 @@ function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB"];
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** power).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
+}
+
+function timelineTime(image) {
+  return image.source_time || image.created_at || "";
+}
+
+function timelineDateLabel(image) {
+  const date = parseDate(timelineTime(image));
+  if (!date) return "未知时间";
+  return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
+}
+
+function timelineClockLabel(image) {
+  const date = parseDate(timelineTime(image));
+  if (!date) return "--:--";
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTime(value) {
+  const date = parseDate(value);
+  if (!date) return "";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function toDateTimeLocalValue(value) {
+  if (!value) return "";
+  const date = parseDate(value);
+  if (!date) return String(value).slice(0, 16);
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 16);
 }
 
 function priorityOptions(value = "") {
@@ -1045,6 +1144,7 @@ $("organizeSelectedButton").onclick = organizeSelectedImages;
 $("exportButton").onclick = exportSelected;
 $("listViewButton").onclick = () => setView("list");
 $("imageBoardButton").onclick = () => setView("image-board");
+$("timelineViewButton").onclick = () => setView("timeline");
 $("workBoardButton").onclick = () => setView("work-board");
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;

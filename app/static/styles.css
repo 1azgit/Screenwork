@@ -430,6 +430,77 @@ body.lightbox-open {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
 }
 
+.timeline {
+  display: grid;
+  gap: 18px;
+  overflow: auto;
+  padding: 0 4px 24px;
+  align-content: start;
+}
+
+.timeline-day {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.timeline-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.timeline-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.timeline-items {
+  display: grid;
+  gap: 12px;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 96px minmax(220px, 360px);
+  gap: 12px;
+  align-items: start;
+  position: relative;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: 87px;
+  top: 0;
+  bottom: -12px;
+  width: 1px;
+  background: var(--line);
+}
+
+.timeline-time {
+  position: relative;
+  z-index: 1;
+  background: var(--bg);
+  display: grid;
+  gap: 3px;
+  justify-items: end;
+  padding-right: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timeline-time strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
 .lightbox {
   position: fixed;
   inset: 0;
@@ -889,5 +960,18 @@ textarea.control {
 
   .upload-meta {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .timeline-item {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-item::before {
+    display: none;
+  }
+
+  .timeline-time {
+    justify-items: start;
+    padding-right: 0;
   }
 }

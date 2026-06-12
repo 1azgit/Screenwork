@@ -91,6 +91,7 @@ def init_db() -> None:
                 title TEXT NOT NULL DEFAULT '',
                 note TEXT NOT NULL DEFAULT '',
                 expanded_note TEXT NOT NULL DEFAULT '',
+                source_time TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'new',
                 priority TEXT NOT NULL DEFAULT '',
                 starred INTEGER NOT NULL DEFAULT 0,
@@ -150,6 +151,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE images ADD COLUMN ai_status TEXT NOT NULL DEFAULT ''")
         if "ai_error" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN ai_error TEXT NOT NULL DEFAULT ''")
+        if "source_time" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_time TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
         work_columns = {row["name"] for row in conn.execute("PRAGMA table_info(work_groups)").fetchall()}
         if "priority" not in work_columns:
@@ -183,6 +186,7 @@ class ImagePatch(BaseModel):
     title: Optional[str] = None
     note: Optional[str] = None
     expanded_note: Optional[str] = None
+    source_time: Optional[str] = None
     status: Optional[str] = None
     priority: Optional[str] = None
     starred: Optional[bool] = None
@@ -752,6 +756,7 @@ def list_images(
     tag: str = "",
     q: str = "",
     sort: str = "newest",
+    timeline: bool = False,
     no_content: bool = False,
     page: int = 1,
     page_size: int = 60,
@@ -798,7 +803,8 @@ def list_images(
         where.append("t.name = ?")
         params.append(tag.strip().lower())
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    order_sql = "i.created_at ASC" if sort == "oldest" else "i.created_at DESC"
+    time_expr = "COALESCE(NULLIF(i.source_time, ''), i.created_at)" if timeline else "i.created_at"
+    order_sql = f"{time_expr} ASC" if sort == "oldest" else f"{time_expr} DESC"
     offset = (page - 1) * page_size
     with db() as conn:
         rows = conn.execute(
@@ -843,7 +849,7 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
             get_category_depth(conn, payload.category_id)
         updates = []
         params: list[Any] = []
-        for field in ("title", "note", "expanded_note", "status", "priority", "starred", "category_id"):
+        for field in ("title", "note", "expanded_note", "source_time", "status", "priority", "starred", "category_id"):
             if field in fields:
                 updates.append(f"{field} = ?")
                 value = getattr(payload, field)
@@ -853,6 +859,8 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
                     value = normalize_status(value)
                 elif field == "starred":
                     value = 1 if value else 0
+                elif field == "source_time":
+                    value = (value or "").strip()[:40]
                 params.append(value)
         if updates:
             updates.append("updated_at = ?")
@@ -1191,6 +1199,7 @@ def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
                 "title",
                 "note",
                 "expanded_note",
+                "source_time",
                 "status",
                 "priority",
                 "starred",
@@ -1207,6 +1216,7 @@ def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
                     "title": image["title"],
                     "note": image["note"],
                     "expanded_note": image["expanded_note"],
+                    "source_time": image["source_time"],
                     "status": image["status"],
                     "priority": image["priority"],
                     "starred": "yes" if image["starred"] else "no",
