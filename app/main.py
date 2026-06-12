@@ -7,6 +7,7 @@ import re
 import sqlite3
 import uuid
 import zipfile
+import html
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -558,6 +559,158 @@ def set_image_tags(conn: sqlite3.Connection, image_id: int, tags: list[str]) -> 
         conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (name,))
         row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
         conn.execute("INSERT OR IGNORE INTO image_tags (image_id, tag_id) VALUES (?, ?)", (image_id, row["id"]))
+
+
+EXPORT_FIELDS = [
+    "id",
+    "original_name",
+    "title",
+    "note",
+    "expanded_note",
+    "source_time",
+    "status",
+    "priority",
+    "starred",
+    "tags",
+    "created_at",
+]
+
+
+def selected_images_for_export(ids: list[int]) -> list[dict[str, Any]]:
+    if not ids:
+        raise HTTPException(status_code=400, detail="No images selected")
+    placeholders = ",".join("?" for _ in ids)
+    case_sql = " ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(ids))
+    with db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM images WHERE id IN ({placeholders}) ORDER BY CASE id {case_sql} END",
+            [*ids, *ids],
+        ).fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail="Images not found")
+        images = []
+        for row in rows:
+            item = dict(row)
+            item["starred"] = bool(item.get("starred", 0))
+            item["tags"] = get_image_tags(conn, item["id"])
+            images.append(item)
+        return images
+
+
+def export_row(image: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": image["id"],
+        "original_name": image["original_name"],
+        "title": image["title"],
+        "note": image["note"],
+        "expanded_note": image["expanded_note"],
+        "source_time": image["source_time"],
+        "status": image["status"],
+        "priority": image["priority"],
+        "starred": "yes" if image["starred"] else "no",
+        "tags": ",".join(image["tags"]),
+        "created_at": image["created_at"],
+    }
+
+
+def csv_text(images: list[dict[str, Any]], notion: bool = False) -> str:
+    buffer = io.StringIO()
+    if notion:
+        fieldnames = [
+            "Name",
+            "Status",
+            "Priority",
+            "Starred",
+            "Tags",
+            "Summary",
+            "Idea",
+            "Source Time",
+            "Upload Time",
+            "Original File",
+        ]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for image in images:
+            writer.writerow(
+                {
+                    "Name": image["title"] or image["original_name"],
+                    "Status": image["status"],
+                    "Priority": image["priority"],
+                    "Starred": "true" if image["starred"] else "false",
+                    "Tags": ",".join(image["tags"]),
+                    "Summary": image["note"],
+                    "Idea": image["expanded_note"],
+                    "Source Time": image["source_time"],
+                    "Upload Time": image["created_at"],
+                    "Original File": image["original_name"],
+                }
+            )
+    else:
+        writer = csv.DictWriter(buffer, fieldnames=EXPORT_FIELDS)
+        writer.writeheader()
+        for image in images:
+            writer.writerow(export_row(image))
+    return buffer.getvalue()
+
+
+def markdown_text(images: list[dict[str, Any]]) -> str:
+    lines = ["# Screenwork 导出", ""]
+    for image in images:
+        title = image["title"] or image["original_name"]
+        lines.extend(
+            [
+                f"## {title}",
+                "",
+                f"- 文件: `{image['original_name']}`",
+                f"- 状态: {image['status']}",
+                f"- 优先级: {image['priority'] or '未设置'}",
+                f"- 星标: {'是' if image['starred'] else '否'}",
+                f"- TAG: {', '.join(image['tags']) or '无'}",
+                f"- 来源时间: {image['source_time'] or '未填写'}",
+                f"- 上传时间: {image['created_at']}",
+                "",
+                "### 摘要",
+                image["note"] or "无",
+                "",
+                "### 可开发点子",
+                image["expanded_note"] or "无",
+                "",
+                f"![{title}](images/{image['original_name']})",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def excel_html(images: list[dict[str, Any]]) -> str:
+    headers = ["标题", "状态", "优先级", "星标", "TAG", "摘要", "可开发点子", "来源时间", "上传时间", "原文件"]
+    rows = []
+    for image in images:
+        rows.append(
+            [
+                image["title"] or image["original_name"],
+                image["status"],
+                image["priority"],
+                "是" if image["starred"] else "否",
+                ",".join(image["tags"]),
+                image["note"],
+                image["expanded_note"],
+                image["source_time"],
+                image["created_at"],
+                image["original_name"],
+            ]
+        )
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(cell or ''))}</td>" for cell in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        '<html><head><meta charset="utf-8"></head><body>'
+        '<table border="1">'
+        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody>"
+        "</table></body></html>"
+    )
 
 
 def save_thumbnail(source_path: Path, thumb_path: Path) -> tuple[int | None, int | None]:
@@ -1171,66 +1324,50 @@ def save_settings(payload: SettingsPatch) -> dict[str, bool]:
 
 
 @app.post("/api/export")
-def export_images(payload: dict[str, list[int]]) -> StreamingResponse:
+def export_images(payload: dict[str, Any]) -> Response:
     ids = payload.get("ids") or []
-    if not ids:
-        raise HTTPException(status_code=400, detail="No images selected")
-    placeholders = ",".join("?" for _ in ids)
-    with db() as conn:
-        rows = conn.execute(f"SELECT * FROM images WHERE id IN ({placeholders})", ids).fetchall()
-        if not rows:
-            raise HTTPException(status_code=404, detail="Images not found")
-        images = []
-        for row in rows:
-            item = dict(row)
-            item["starred"] = bool(item.get("starred", 0))
-            item["tags"] = get_image_tags(conn, item["id"])
-            images.append(item)
+    export_format = str(payload.get("format") or "zip").lower()
+    if export_format not in {"zip", "markdown", "excel", "notion"}:
+        raise HTTPException(status_code=400, detail="Invalid export format")
+    images = selected_images_for_export(ids)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if export_format == "markdown":
+        content = markdown_text(images).encode("utf-8")
+        return Response(
+            content=content,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="screenwork-export-{stamp}.md"'},
+        )
+
+    if export_format == "excel":
+        content = ("\ufeff" + excel_html(images)).encode("utf-8")
+        return Response(
+            content=content,
+            media_type="application/vnd.ms-excel; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="screenwork-export-{stamp}.xls"'},
+        )
+
+    if export_format == "notion":
+        content = ("\ufeff" + csv_text(images, notion=True)).encode("utf-8")
+        return Response(
+            content=content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="screenwork-notion-{stamp}.csv"'},
+        )
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("metadata.json", json.dumps(images, ensure_ascii=False, indent=2))
-        csv_buffer = io.StringIO()
-        writer = csv.DictWriter(
-            csv_buffer,
-            fieldnames=[
-                "id",
-                "original_name",
-                "title",
-                "note",
-                "expanded_note",
-                "source_time",
-                "status",
-                "priority",
-                "starred",
-                "tags",
-                "created_at",
-            ],
-        )
-        writer.writeheader()
+        archive.writestr("metadata.csv", csv_text(images))
+        archive.writestr("screenwork.md", markdown_text(images))
         for image in images:
-            writer.writerow(
-                {
-                    "id": image["id"],
-                    "original_name": image["original_name"],
-                    "title": image["title"],
-                    "note": image["note"],
-                    "expanded_note": image["expanded_note"],
-                    "source_time": image["source_time"],
-                    "status": image["status"],
-                    "priority": image["priority"],
-                    "starred": "yes" if image["starred"] else "no",
-                    "tags": ",".join(image["tags"]),
-                    "created_at": image["created_at"],
-                }
-            )
             source = UPLOAD_DIR / image["filename"]
             if source.exists():
                 archive.write(source, f"images/{image['original_name']}")
-        archive.writestr("metadata.csv", csv_buffer.getvalue())
 
     buffer.seek(0)
-    filename = f"screenwork-export-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+    filename = f"screenwork-export-{stamp}.zip"
     return StreamingResponse(
         buffer,
         media_type="application/zip",

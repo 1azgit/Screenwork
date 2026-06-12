@@ -634,23 +634,32 @@ async function exportSelected() {
     setStatus("先选择图片");
     return;
   }
+  const format = $("exportFormat").value;
+  setStatus("正在生成导出文件");
   const response = await fetch("/api/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [...state.selectedIds] }),
+    body: JSON.stringify({ ids: [...state.selectedIds], format }),
   });
   if (!response.ok) {
-    setStatus("导出失败");
+    let message = "导出失败";
+    try {
+      const data = await response.json();
+      message = data.detail || message;
+    } catch (_) {
+      // Keep fallback message.
+    }
+    setStatus(message);
     return;
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `screenwork-export-${Date.now()}.zip`;
+  link.download = responseFilename(response) || `screenwork-export-${Date.now()}.${exportExtension(format)}`;
   link.click();
   URL.revokeObjectURL(url);
-  setStatus("导出完成");
+  setStatus(`${exportFormatLabel(format)} 导出完成`);
 }
 
 async function startNewWorkGroup() {
@@ -1043,6 +1052,20 @@ function formatBytes(bytes) {
   const units = ["B", "KB", "MB", "GB"];
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** power).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
+}
+
+function responseFilename(response) {
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : "";
+}
+
+function exportExtension(format) {
+  return { zip: "zip", markdown: "md", excel: "xls", notion: "csv" }[format] || "zip";
+}
+
+function exportFormatLabel(format) {
+  return { zip: "ZIP", markdown: "Markdown", excel: "Excel", notion: "Notion CSV" }[format] || "文件";
 }
 
 function timelineTime(image) {
