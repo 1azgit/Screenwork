@@ -103,7 +103,10 @@
         <button id="lightboxClose" class="button" type="button">关闭</button>
       </div>
       <div id="lightboxStage" class="lightbox-stage">
-        <img id="lightboxImage" alt="" />
+        <div id="lightboxImageWrap" class="lightbox-image-wrap">
+          <img id="lightboxImage" alt="" />
+          <svg id="lightboxAnnotationSvg" class="annotation-overlay"></svg>
+        </div>
       </div>
       <aside id="lightboxInfo" class="lightbox-info" hidden></aside>
     </div>
@@ -112,6 +115,7 @@
       <div class="annotation-toolbar">
         <button id="annotationBoxTool" class="button primary" type="button">画框</button>
         <button id="annotationArrowTool" class="button" type="button">箭头</button>
+        <label class="annotation-color-label">颜色<input id="annotationColor" type="color" value="#f97316" /></label>
         <input id="annotationTextInput" class="control annotation-text-input" placeholder="文字备注" />
         <button id="annotationTextTool" class="button" type="button">添加文字</button>
         <button id="annotationUndo" class="button" type="button">撤销</button>

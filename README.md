@@ -12,6 +12,7 @@ Screenwork is a small internal web app for collecting and developing screenshot 
 - Work project menu for grouping tagged screenshots into development tasks.
 - Image grid and detail editor.
 - Title, note, status, category, and TAG marking.
+- Local image annotations with boxes, arrows, text notes, and colors.
 - AI expansion through a local Metapi OpenAI-compatible or Claude-compatible API.
 - Export selected screenshots as ZIP, Markdown, Excel, or Notion-style CSV.
 - Local backup and restore from Settings, including SQLite data, uploads, thumbnails, and exports.
