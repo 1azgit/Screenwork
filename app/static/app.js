@@ -434,7 +434,9 @@ function renderDetail(image) {
               </select>
             </label>
           </div>
-          <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
+          <label>TAG
+            <div id="detailTags" class="tag-input" data-placeholder="输入 TAG 后按两个空格确认"></div>
+          </label>
           <div class="detail-section">
             <h3>来源记录</h3>
             <div class="source-record-grid">
@@ -474,6 +476,7 @@ function renderDetail(image) {
   detailImage.onclick = () => openLightbox(image);
   detailImage.onload = () => renderAnnotationOverlay(detailSvg, image.annotations || []);
   renderAnnotationOverlay(detailSvg, image.annotations || []);
+  initTagInput($("detailTags"), image.tags || []);
   $("organizeButton").onclick = async () => organizeImage(image.id);
   $("expandButton").onclick = async () => expandNote(image.id);
   $("annotateButton").onclick = () => openAnnotationEditor(image);
@@ -492,7 +495,7 @@ async function saveDetail(id) {
     status: $("detailStatus").value,
     priority: $("detailPriority").value,
     starred: $("detailStarred").checked,
-    tags: $("detailTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
+    tags: getTagInputValues($("detailTags")),
     note: $("detailNote").value,
     expanded_note: $("detailExpanded").value,
     annotations: state.annotation.image?.id === id ? state.annotation.items : undefined,
@@ -629,7 +632,7 @@ function openBatchEditor() {
       <select id="batchCategory" class="control">${categoryOptions}</select>
 
       <label class="inline-check"><input id="applyTags" type="checkbox" /> TAG</label>
-      <input id="batchTags" class="control" placeholder="tag1, tag2" />
+      <div id="batchTags" class="tag-input" data-placeholder="输入 TAG 后按两个空格确认"></div>
       <select id="batchTagMode" class="control">
         <option value="append">追加 TAG</option>
         <option value="replace">替换 TAG</option>
@@ -645,6 +648,7 @@ function openBatchEditor() {
       <button class="button primary" type="submit">应用到选中图片</button>
     </form>
   `;
+  initTagInput($("batchTags"), []);
   $("batchForm").onsubmit = submitBatchEdit;
 }
 
@@ -654,7 +658,7 @@ async function submitBatchEdit(event) {
   if ($("applyTitle").checked) payload.title = $("batchTitle").value;
   if ($("applyCategory").checked) payload.category_id = $("batchCategory").value ? Number($("batchCategory").value) : null;
   if ($("applyTags").checked) {
-    payload.tags = $("batchTags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+    payload.tags = getTagInputValues($("batchTags"));
     payload.tag_mode = $("batchTagMode").value;
   }
   if ($("applyNote").checked) {
@@ -1518,6 +1522,95 @@ function statusOptions(value = "new") {
 
 function statusLabel(value = "new") {
   return STATUSES.find(([status]) => status === value)?.[1] || value;
+}
+
+function initTagInput(container, values = []) {
+  container.dataset.tags = JSON.stringify(uniqueTags(values));
+  container.innerHTML = `
+    <div class="tag-input-tokens"></div>
+    <input class="tag-input-field" autocomplete="off" />
+  `;
+  const input = container.querySelector(".tag-input-field");
+  input.placeholder = container.dataset.placeholder || "";
+  input.oninput = () => {
+    if (/\s{2,}$/.test(input.value) || input.value.includes(",") || input.value.includes("，")) {
+      commitTagInput(container);
+    }
+  };
+  input.onkeydown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitTagInput(container);
+    } else if (event.key === "Backspace" && !input.value) {
+      const tags = getTagInputValues(container);
+      tags.pop();
+      setTagInputValues(container, tags);
+    }
+  };
+  input.onblur = () => commitTagInput(container);
+  container.onclick = () => input.focus();
+  renderTagInput(container);
+}
+
+function uniqueTags(values) {
+  const tags = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    for (const part of String(value).split(/[,\uFF0C]|\s{2,}/)) {
+      const tag = part.trim();
+      const key = tag.toLowerCase();
+      if (tag && !seen.has(key)) {
+        seen.add(key);
+        tags.push(tag);
+      }
+    }
+  }
+  return tags;
+}
+
+function getTagInputValues(container) {
+  try {
+    return JSON.parse(container.dataset.tags || "[]");
+  } catch (_) {
+    return [];
+  }
+}
+
+function setTagInputValues(container, tags) {
+  container.dataset.tags = JSON.stringify(uniqueTags(tags));
+  renderTagInput(container);
+}
+
+function commitTagInput(container) {
+  const input = container.querySelector(".tag-input-field");
+  const nextTags = uniqueTags([...getTagInputValues(container), input.value]);
+  input.value = "";
+  setTagInputValues(container, nextTags);
+}
+
+function renderTagInput(container) {
+  const tokens = container.querySelector(".tag-input-tokens");
+  const input = container.querySelector(".tag-input-field");
+  const tags = getTagInputValues(container);
+  tokens.innerHTML = tags
+    .map((tag, index) => `
+      <button class="tag-token" type="button" data-index="${index}">
+        <span>${escapeHtml(tag)}</span>
+        <b aria-hidden="true">×</b>
+      </button>
+    `)
+    .join("");
+  tokens.querySelectorAll(".tag-token").forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      const index = Number(button.dataset.index);
+      const nextTags = getTagInputValues(container);
+      nextTags.splice(index, 1);
+      setTagInputValues(container, nextTags);
+      input.focus();
+    };
+  });
+  if (input) input.placeholder = tags.length ? "" : (container.dataset.placeholder || "");
 }
 
 function sourceLinkHtml(value) {

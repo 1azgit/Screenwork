@@ -346,6 +346,66 @@ body.lightbox-open {
   color: #8a5a00;
 }
 
+.tag-input {
+  min-height: 38px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 5px 7px;
+  cursor: text;
+}
+
+.tag-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+}
+
+.tag-input-tokens {
+  display: contents;
+}
+
+.tag-token {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid #9ccac5;
+  border-radius: 999px;
+  background: #e8f3f1;
+  color: var(--accent-dark);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tag-token span {
+  overflow-wrap: anywhere;
+}
+
+.tag-token b {
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tag-input-field {
+  min-width: 130px;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  padding: 4px 2px;
+  font: inherit;
+  color: var(--text);
+}
+
 .tag-line,
 .note-line,
 .muted-line,
