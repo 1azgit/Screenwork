@@ -372,6 +372,64 @@ body.lightbox-open {
   pointer-events: none;
 }
 
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(240px, 1fr));
+  gap: 12px;
+  overflow: auto;
+  padding-bottom: 24px;
+  align-content: start;
+}
+
+.kanban-column {
+  min-width: 240px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  background: #eef3f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.kanban-column h3 {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+}
+
+.kanban-column h3 span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kanban-items {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.kanban-items .image-card img {
+  aspect-ratio: 4 / 3;
+}
+
+.work-card {
+  display: grid;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.work-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+}
+
 .lightbox {
   position: fixed;
   inset: 0;

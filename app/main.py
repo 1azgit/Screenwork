@@ -30,6 +30,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_EXTENSIONS = {".png"}
 MAX_CATEGORY_DEPTH = 3
 PRIORITY_VALUES = {"", "高价值", "待验证", "可立即开发"}
+STATUS_VALUES = {"new", "reviewing", "ready", "developing", "done"}
 
 
 app = FastAPI(title=APP_TITLE)
@@ -120,6 +121,7 @@ def init_db() -> None:
                 title TEXT NOT NULL,
                 purpose TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'new',
                 tags_json TEXT NOT NULL DEFAULT '[]',
                 combined_group_ids_json TEXT NOT NULL DEFAULT '[]',
                 priority TEXT NOT NULL DEFAULT '',
@@ -156,6 +158,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE work_groups ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
         if "ai_plan" not in work_columns:
             conn.execute("ALTER TABLE work_groups ADD COLUMN ai_plan TEXT NOT NULL DEFAULT ''")
+        if "status" not in work_columns:
+            conn.execute("ALTER TABLE work_groups ADD COLUMN status TEXT NOT NULL DEFAULT 'new'")
 
 
 @app.on_event("startup")
@@ -222,6 +226,7 @@ class WorkGroupIn(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     purpose: str = ""
     notes: str = ""
+    status: str = "new"
     priority: str = ""
     starred: bool = False
     tags: list[str] = []
@@ -234,6 +239,7 @@ class WorkGroupPatch(BaseModel):
     purpose: Optional[str] = None
     notes: Optional[str] = None
     ai_plan: Optional[str] = None
+    status: Optional[str] = None
     priority: Optional[str] = None
     starred: Optional[bool] = None
     tags: Optional[list[str]] = None
@@ -289,6 +295,13 @@ def normalize_priority(priority: str | None) -> str:
     value = (priority or "").strip()
     if value not in PRIORITY_VALUES:
         raise HTTPException(status_code=400, detail="Invalid priority")
+    return value
+
+
+def normalize_status(status: str | None) -> str:
+    value = (status or "new").strip()
+    if value not in STATUS_VALUES:
+        raise HTTPException(status_code=400, detail="Invalid status")
     return value
 
 
@@ -836,6 +849,8 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
                 value = getattr(payload, field)
                 if field == "priority":
                     value = normalize_priority(value)
+                elif field == "status":
+                    value = normalize_status(value)
                 elif field == "starred":
                     value = 1 if value else 0
                 params.append(value)
@@ -1015,14 +1030,15 @@ def create_work_group(payload: WorkGroupIn) -> dict[str, Any]:
         cur = conn.execute(
             """
             INSERT INTO work_groups (
-                title, purpose, notes, priority, starred, tags_json, combined_group_ids_json, created_at, updated_at
+                title, purpose, notes, status, priority, starred, tags_json, combined_group_ids_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.title.strip(),
                 payload.purpose.strip(),
                 payload.notes.strip(),
+                normalize_status(payload.status),
                 normalize_priority(payload.priority),
                 1 if payload.starred else 0,
                 json.dumps(normalize_tags(payload.tags), ensure_ascii=False),
@@ -1059,6 +1075,9 @@ def update_work_group(group_id: int, payload: WorkGroupPatch) -> dict[str, Any]:
             if field in fields:
                 updates.append(f"{field} = ?")
                 params.append((getattr(payload, field) or "").strip())
+        if "status" in fields:
+            updates.append("status = ?")
+            params.append(normalize_status(payload.status))
         if "priority" in fields:
             updates.append("priority = ?")
             params.append(normalize_priority(payload.priority))

@@ -7,6 +7,7 @@ const state = {
   selectedIds: new Set(),
   searchTokens: [],
   mode: "images",
+  view: "list",
   workPicker: null,
   lightbox: {
     image: null,
@@ -16,6 +17,13 @@ const state = {
 };
 
 const PRIORITIES = ["", "高价值", "待验证", "可立即开发"];
+const STATUSES = [
+  ["new", "新截图"],
+  ["reviewing", "已整理"],
+  ["ready", "可开发"],
+  ["developing", "开发中"],
+  ["done", "已完成"],
+];
 
 const $ = (id) => document.getElementById(id);
 
@@ -62,8 +70,10 @@ function renderCategories() {
   all.textContent = "全部截图";
   all.onclick = () => {
     state.mode = "images";
+    state.view = state.view === "image-board" ? "image-board" : "list";
     state.categoryId = null;
     renderCategories();
+    updateViewButtons();
     loadImages();
   };
   root.appendChild(all);
@@ -79,8 +89,10 @@ function renderCategories() {
     button.textContent = node.name;
     button.onclick = () => {
       state.mode = "images";
+      state.view = state.view === "image-board" ? "image-board" : "list";
       state.categoryId = node.id;
       renderCategories();
+      updateViewButtons();
       loadImages();
     };
     const add = document.createElement("button");
@@ -124,6 +136,62 @@ function renderWorkGroups() {
     button.onclick = () => openWorkGroup(group.id);
     root.appendChild(button);
   }
+}
+
+function setView(view) {
+  state.view = view;
+  if (view === "work-board") {
+    state.mode = "workBoard";
+    state.categoryId = null;
+    renderCategories();
+    renderWorkBoard();
+    setStatus(`${state.workGroups.length} 个工作项目`);
+  } else {
+    state.mode = "images";
+    loadImages();
+  }
+  updateViewButtons();
+}
+
+function updateViewButtons() {
+  $("listViewButton").classList.toggle("primary", state.view === "list");
+  $("imageBoardButton").classList.toggle("primary", state.view === "image-board");
+  $("workBoardButton").classList.toggle("primary", state.view === "work-board");
+}
+
+function renderWorkBoard(resetDetail = true) {
+  const grid = $("imageGrid");
+  grid.className = "kanban-board";
+  grid.innerHTML = "";
+  if (resetDetail) {
+    $("detailPanel").className = "detail empty";
+    $("detailPanel").innerHTML = '<div class="empty-state">选择一个工作项目查看详情</div>';
+  }
+  for (const [status, label] of STATUSES) {
+    const groups = state.workGroups.filter((group) => (group.status || "new") === status);
+    const column = document.createElement("section");
+    column.className = "kanban-column";
+    column.innerHTML = `<h3>${escapeHtml(label)} <span>${groups.length}</span></h3><div class="kanban-items"></div>`;
+    const list = column.querySelector(".kanban-items");
+    for (const group of groups) list.appendChild(createWorkCard(group));
+    grid.appendChild(column);
+  }
+}
+
+function createWorkCard(group) {
+  const card = document.createElement("article");
+  card.className = "work-card";
+  card.innerHTML = `
+    <div class="card-title">${group.starred ? "★ " : ""}${escapeHtml(group.title)}</div>
+    <div class="muted-line">${escapeHtml(group.purpose || "无目的")}</div>
+    <div class="tag-line">${escapeHtml((group.tags || []).join(", "))}</div>
+    <div class="card-meta">
+      <span>${escapeHtml(statusLabel(group.status || "new"))}</span>
+      <span>${renderPriorityBadges(group)}</span>
+    </div>
+  `;
+  card.onclick = () => openWorkGroup(group.id);
+  return card;
 }
 
 async function createCategory(parentId = null) {
@@ -200,8 +268,13 @@ async function loadImages() {
   if ($("noContentFilter").checked) params.set("no_content", "true");
   const data = await api(`/api/images?${params.toString()}`);
   state.images = data.items;
-  renderImages();
+  renderImageCollection();
   setStatus(`${data.total} 张截图`);
+}
+
+function renderImageCollection() {
+  if (state.view === "image-board") renderImageBoard();
+  else renderImages();
 }
 
 function renderImages() {
@@ -209,45 +282,64 @@ function renderImages() {
   grid.className = "image-grid";
   grid.innerHTML = "";
   for (const image of state.images) {
-    const card = document.createElement("article");
-    const isSelected = state.selectedIds.has(image.id);
-    card.className = `image-card ${state.selectedId === image.id ? "active" : ""} ${isSelected ? "selected" : ""}`;
-    card.onclick = (event) => {
-      if (event.target.type === "checkbox") return;
-      selectImage(image.id);
-    };
-    const checked = isSelected ? "checked" : "";
-    card.innerHTML = `
-      <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
-      <div class="card-body">
-        <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
-        <div class="card-meta">
-          <span>${escapeHtml(image.status)}</span>
-          <span>${renderPriorityBadges(image)}</span>
-        </div>
-        ${image.ai_status ? `<div class="muted-line">AI：${escapeHtml(image.ai_status)}</div>` : ""}
-        <div class="card-select">
-          <label><input type="checkbox" ${checked} /> 选择</label>
-        </div>
+    grid.appendChild(createImageCard(image));
+  }
+}
+
+function createImageCard(image) {
+  const card = document.createElement("article");
+  const isSelected = state.selectedIds.has(image.id);
+  card.className = `image-card ${state.selectedId === image.id ? "active" : ""} ${isSelected ? "selected" : ""}`;
+  card.onclick = (event) => {
+    if (event.target.type === "checkbox") return;
+    selectImage(image.id);
+  };
+  const checked = isSelected ? "checked" : "";
+  card.innerHTML = `
+    <img src="${image.thumb_url}" alt="${escapeHtml(image.title || image.original_name)}" loading="lazy" />
+    <div class="card-body">
+      <div class="card-title">${escapeHtml(image.title || image.original_name)}</div>
+      <div class="card-meta">
+        <span>${escapeHtml(statusLabel(image.status))}</span>
+        <span>${renderPriorityBadges(image)}</span>
       </div>
-    `;
-    card.querySelector("input").onchange = (event) => {
-      if (event.target.checked) state.selectedIds.add(image.id);
-      else state.selectedIds.delete(image.id);
-      renderImages();
-    };
-    card.querySelector("img").onclick = (event) => {
-      event.stopPropagation();
-      openLightbox(image);
-    };
-    grid.appendChild(card);
+      ${image.ai_status ? `<div class="muted-line">AI：${escapeHtml(image.ai_status)}</div>` : ""}
+      <div class="card-select">
+        <label><input type="checkbox" ${checked} /> 选择</label>
+      </div>
+    </div>
+  `;
+  card.querySelector("input").onchange = (event) => {
+    if (event.target.checked) state.selectedIds.add(image.id);
+    else state.selectedIds.delete(image.id);
+    renderImageCollection();
+  };
+  card.querySelector("img").onclick = (event) => {
+    event.stopPropagation();
+    openLightbox(image);
+  };
+  return card;
+}
+
+function renderImageBoard() {
+  const grid = $("imageGrid");
+  grid.className = "kanban-board";
+  grid.innerHTML = "";
+  for (const [status, label] of STATUSES) {
+    const items = state.images.filter((image) => image.status === status);
+    const column = document.createElement("section");
+    column.className = "kanban-column";
+    column.innerHTML = `<h3>${escapeHtml(label)} <span>${items.length}</span></h3><div class="kanban-items"></div>`;
+    const list = column.querySelector(".kanban-items");
+    for (const image of items) list.appendChild(createImageCard(image));
+    grid.appendChild(column);
   }
 }
 
 async function selectImage(id) {
   state.selectedId = id;
   const image = await api(`/api/images/${id}`);
-  renderImages();
+  renderImageCollection();
   renderDetail(image);
 }
 
@@ -270,7 +362,7 @@ function renderDetail(image) {
       <label>分类<select id="detailCategory" class="control">${categoryOptions}</select></label>
       <label>状态
         <select id="detailStatus" class="control">
-          ${["new", "reviewing", "ready", "done"].map((status) => `<option value="${status}" ${image.status === status ? "selected" : ""}>${status}</option>`).join("")}
+          ${statusOptions(image.status)}
         </select>
       </label>
       <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
@@ -384,13 +476,13 @@ async function uploadSelected(files) {
 
 function selectAllCurrentImages() {
   for (const image of state.images) state.selectedIds.add(image.id);
-  renderImages();
+  renderImageCollection();
   setStatus(`已选择 ${state.selectedIds.size} 张`);
 }
 
 function clearImageSelection() {
   state.selectedIds.clear();
-  renderImages();
+  renderImageCollection();
   setStatus("已取消选择");
 }
 
@@ -532,6 +624,7 @@ function renderWorkBuilder(tags) {
     <form id="workForm">
       <label>标题<input id="workTitle" class="control" placeholder="工作项目标题" required /></label>
       <label>工作目的<textarea id="workPurpose" class="control" placeholder="这组截图要解决什么问题"></textarea></label>
+      <label>状态<select id="workStatus" class="control">${statusOptions("new")}</select></label>
       <label>优先级<select id="workPriority" class="control">${priorityOptions("")}</select></label>
       <label class="inline-check form-check">
         <input id="workStarred" type="checkbox" />
@@ -674,6 +767,7 @@ async function saveWorkGroup(event) {
     title: $("workTitle").value,
     purpose: $("workPurpose").value,
     notes: $("workNotes").value,
+    status: $("workStatus").value,
     priority: $("workPriority").value,
     starred: $("workStarred").checked,
     tags: state.workPicker.tags,
@@ -683,11 +777,14 @@ async function saveWorkGroup(event) {
   const group = await api("/api/work-groups", { method: "POST", body: JSON.stringify(payload) });
   await loadWorkGroups();
   renderWorkGroupDetail(group);
+  if (state.view === "work-board") renderWorkBoard(false);
   setStatus("工作项目已创建");
 }
 
 async function openWorkGroup(groupId) {
   state.mode = "workDetail";
+  state.view = state.view === "work-board" ? "work-board" : state.view;
+  updateViewButtons();
   const group = await api(`/api/work-groups/${groupId}`);
   renderWorkGroupDetail(group);
 }
@@ -717,12 +814,14 @@ function renderWorkGroupDetail(group) {
   panel.innerHTML = `
     <h2>${escapeHtml(group.title)}</h2>
     <div class="priority-row">
+      <span class="priority-badge">${escapeHtml(statusLabel(group.status || "new"))}</span>
       ${group.starred ? '<span class="priority-badge starred">★ 星标</span>' : ""}
       ${group.priority ? `<span class="priority-badge">${escapeHtml(group.priority)}</span>` : '<span class="muted-line">未设置优先级</span>'}
     </div>
     <section class="work-section"><strong>目的</strong><p>${escapeHtml(group.purpose || "")}</p></section>
     <section class="work-section"><strong>组合工作组</strong><p>${escapeHtml((group.combined_groups || []).map((item) => item.title).join(", ") || "无")}</p></section>
     <section class="work-section"><strong>TAG</strong><p>${escapeHtml((group.tags || []).join(", "))}</p></section>
+    <label>状态<select id="workDetailStatus" class="control">${statusOptions(group.status || "new")}</select></label>
     <label>优先级<select id="workDetailPriority" class="control">${priorityOptions(group.priority)}</select></label>
     <label class="inline-check form-check">
       <input id="workDetailStarred" type="checkbox" ${group.starred ? "checked" : ""} />
@@ -749,12 +848,14 @@ function renderWorkGroupDetail(group) {
       body: JSON.stringify({
         notes: $("workDetailNotes").value,
         ai_plan: $("workAiPlan").value,
+        status: $("workDetailStatus").value,
         priority: $("workDetailPriority").value,
         starred: $("workDetailStarred").checked,
       }),
     });
     renderWorkGroupDetail(updated);
     await loadWorkGroups();
+    if (state.view === "work-board") renderWorkBoard(false);
     setStatus("备注已保存");
   };
   $("generateWorkPlan").onclick = async () => generateWorkPlan(group.id);
@@ -767,6 +868,7 @@ async function generateWorkPlan(groupId) {
     const group = await api(`/api/work-groups/${groupId}/plan`, { method: "POST", body: JSON.stringify({}) });
     renderWorkGroupDetail(group);
     await loadWorkGroups();
+    if (state.view === "work-board") renderWorkBoard(false);
     setStatus("开发方案已生成");
   } catch (error) {
     setStatus(error.message);
@@ -894,6 +996,16 @@ function priorityOptions(value = "") {
   }).join("");
 }
 
+function statusOptions(value = "new") {
+  return STATUSES.map(([status, label]) => (
+    `<option value="${escapeAttr(status)}" ${value === status ? "selected" : ""}>${escapeHtml(label)}</option>`
+  )).join("");
+}
+
+function statusLabel(value = "new") {
+  return STATUSES.find(([status]) => status === value)?.[1] || value;
+}
+
 function renderPriorityBadges(item) {
   const badges = [];
   if (item.starred) badges.push('<span class="priority-badge starred">★</span>');
@@ -931,6 +1043,9 @@ $("cancelSelectionButton").onclick = clearImageSelection;
 $("deleteSelectedButton").onclick = deleteSelectedImages;
 $("organizeSelectedButton").onclick = organizeSelectedImages;
 $("exportButton").onclick = exportSelected;
+$("listViewButton").onclick = () => setView("list");
+$("imageBoardButton").onclick = () => setView("image-board");
+$("workBoardButton").onclick = () => setView("work-board");
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
 $("statusFilter").onchange = loadImages;
@@ -946,5 +1061,6 @@ $("lightboxImage").onwheel = zoomLightbox;
 $("lightboxImage").onclick = (event) => event.stopPropagation();
 $("lightboxStage").onclick = closeLightbox;
 document.addEventListener("keydown", handleLightboxKeydown);
+updateViewButtons();
 
 Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));
