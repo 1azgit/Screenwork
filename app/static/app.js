@@ -955,6 +955,7 @@ async function openSettings() {
   $("metapiProvider").value = settings.metapi_provider || "openai";
   $("metapiApiKey").value = "";
   $("settingsDialog").showModal();
+  await loadBackups();
 }
 
 async function saveSettings(event) {
@@ -972,6 +973,73 @@ async function saveSettings(event) {
     $("settingsDialog").close();
     setStatus("设置已保存");
   } catch (error) {
+    setStatus(error.message);
+  }
+}
+
+async function loadBackups() {
+  try {
+    const data = await api("/api/backups");
+    renderBackups(data.backups || []);
+  } catch (error) {
+    $("backupStatus").textContent = error.message;
+  }
+}
+
+function renderBackups(backups) {
+  const list = $("backupList");
+  if (!backups.length) {
+    list.innerHTML = `<div class="empty-line">还没有备份</div>`;
+    return;
+  }
+  list.innerHTML = backups
+    .map(
+      (backup) => `
+        <div class="backup-row">
+          <div>
+            <strong>${escapeHtml(backup.name)}</strong>
+            <span>${escapeHtml(formatBytes(backup.size || 0))} · ${escapeHtml(formatDateTime(backup.created_at))}</span>
+          </div>
+          <a class="small-button" href="${escapeAttr(backup.download_url)}">下载</a>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+async function createLocalBackup() {
+  $("backupStatus").textContent = "正在创建备份";
+  try {
+    const backup = await api("/api/backups", { method: "POST", body: JSON.stringify({}) });
+    $("backupStatus").textContent = `已创建 ${backup.name}`;
+    await loadBackups();
+    setStatus("备份已创建");
+  } catch (error) {
+    $("backupStatus").textContent = error.message;
+    setStatus(error.message);
+  }
+}
+
+async function restoreLocalBackup() {
+  const file = $("restoreInput").files[0];
+  if (!file) {
+    $("backupStatus").textContent = "请选择 ZIP 备份文件";
+    return;
+  }
+  if (!confirm("恢复会用备份覆盖当前数据库和图片文件。系统会先自动创建一份安全备份，确定继续？")) {
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  $("backupStatus").textContent = "正在恢复备份";
+  try {
+    const result = await api("/api/restore", { method: "POST", body: form });
+    $("backupStatus").textContent = `恢复完成，安全备份：${result.safety_backup}`;
+    $("restoreInput").value = "";
+    await Promise.all([loadCategories(), loadWorkGroups(), loadImages(), loadBackups()]);
+    setStatus("备份已恢复");
+  } catch (error) {
+    $("backupStatus").textContent = error.message;
     setStatus(error.message);
   }
 }
@@ -1405,6 +1473,8 @@ $("timelineViewButton").onclick = () => setView("timeline");
 $("workBoardButton").onclick = () => setView("work-board");
 $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
+$("createBackupButton").onclick = createLocalBackup;
+$("restoreBackupButton").onclick = restoreLocalBackup;
 $("statusFilter").onchange = loadImages;
 $("timeSort").onchange = loadImages;
 $("priorityFilter").onchange = loadImages;

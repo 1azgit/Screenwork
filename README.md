@@ -13,7 +13,8 @@ Screenwork is a small internal web app for collecting and developing screenshot 
 - Image grid and detail editor.
 - Title, note, status, category, and TAG marking.
 - AI expansion through a local Metapi OpenAI-compatible or Claude-compatible API.
-- Export selected screenshots as a ZIP with original images, `metadata.json`, and `metadata.csv`.
+- Export selected screenshots as ZIP, Markdown, Excel, or Notion-style CSV.
+- Local backup and restore from Settings, including SQLite data, uploads, thumbnails, and exports.
 - No login or authentication.
 
 ## Local Run
@@ -87,6 +88,16 @@ Runtime data is stored under:
 ```
 
 This folder contains uploads, thumbnails, exports, and the SQLite database. It is ignored by Git and should be backed up separately if needed.
+
+## Backup and Restore
+
+Open Settings in the web UI and use the Backup Restore section.
+
+- `Create Backup` writes a ZIP file under `./data/backups`.
+- Backup ZIP files include `screenwork.db`, `uploads/`, `thumbs/`, `exports/`, and `manifest.json`.
+- Existing backups are not included inside new backups.
+- Restore accepts a Screenwork backup ZIP and automatically creates a `screenwork-pre-restore-*.zip` safety backup before replacing current data.
+- Restore validates ZIP paths and only restores supported Screenwork data paths.
 
 ## GitHub Sync
 

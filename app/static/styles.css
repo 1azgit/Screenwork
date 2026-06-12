@@ -829,7 +829,7 @@ textarea.control {
 }
 
 .modal {
-  width: min(520px, calc(100vw - 28px));
+  width: min(680px, calc(100vw - 28px));
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0;
@@ -845,6 +845,70 @@ textarea.control {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-section h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.backup-actions {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.restore-file {
+  min-width: 0;
+}
+
+.backup-status {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.backup-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.backup-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8faf9;
+}
+
+.backup-row strong,
+.backup-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.backup-row span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.empty-line {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .upload-page {
@@ -1062,6 +1126,15 @@ textarea.control {
 
   .compact-control {
     max-width: none;
+  }
+
+  .backup-actions,
+  .backup-row {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-row .small-button {
+    justify-self: start;
   }
 
   .upload-topbar {

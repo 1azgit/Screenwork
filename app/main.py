@@ -8,14 +8,16 @@ import sqlite3
 import uuid
 import zipfile
 import html
+import shutil
+import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -26,6 +28,7 @@ DATA_DIR = Path(os.getenv("SCREENWORK_DATA_DIR", "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 THUMB_DIR = DATA_DIR / "thumbs"
 EXPORT_DIR = DATA_DIR / "exports"
+BACKUP_DIR = DATA_DIR / "backups"
 DB_PATH = Path(os.getenv("SCREENWORK_DB_PATH", DATA_DIR / "screenwork.db"))
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_EXTENSIONS = {".png"}
@@ -46,6 +49,7 @@ def ensure_dirs() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @contextmanager
@@ -738,6 +742,109 @@ def excel_html(images: list[dict[str, Any]]) -> str:
     )
 
 
+def backup_metadata(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "size": stat.st_size,
+        "created_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "download_url": f"/api/backups/{path.name}",
+    }
+
+
+def backup_filename(prefix: str = "screenwork-backup") -> str:
+    safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "-", prefix).strip("-") or "screenwork-backup"
+    return f"{safe_prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+
+
+def get_backup_path(name: str) -> Path:
+    if Path(name).name != name or not name.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Invalid backup name")
+    path = BACKUP_DIR / name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return path
+
+
+def add_backup_folder(archive: zipfile.ZipFile, folder: Path, archive_root: str) -> None:
+    if not folder.exists():
+        return
+    for path in folder.rglob("*"):
+        if path.is_file():
+            archive.write(path, f"{archive_root}/{path.relative_to(folder).as_posix()}")
+
+
+def create_backup(prefix: str = "screenwork-backup") -> dict[str, Any]:
+    ensure_dirs()
+    target = BACKUP_DIR / backup_filename(prefix)
+    manifest = {
+        "app": APP_TITLE,
+        "created_at": now_iso(),
+        "contains": ["screenwork.db", "uploads", "thumbs", "exports"],
+        "note": "backups directory is intentionally excluded",
+    }
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        if DB_PATH.exists():
+            archive.write(DB_PATH, "screenwork.db")
+        add_backup_folder(archive, UPLOAD_DIR, "uploads")
+        add_backup_folder(archive, THUMB_DIR, "thumbs")
+        add_backup_folder(archive, EXPORT_DIR, "exports")
+    return backup_metadata(target)
+
+
+def validate_restore_member(member: zipfile.ZipInfo) -> None:
+    name = member.filename
+    if "\\" in name:
+        raise HTTPException(status_code=400, detail=f"Invalid backup path: {name}")
+    clean_name = name.rstrip("/")
+    path = PurePosixPath(clean_name)
+    if path.is_absolute() or ".." in path.parts:
+        raise HTTPException(status_code=400, detail=f"Invalid backup path: {name}")
+    if clean_name in {"manifest.json", "screenwork.db"}:
+        return
+    if clean_name in {"uploads", "thumbs", "exports"} and member.is_dir():
+        return
+    if len(path.parts) > 1 and path.parts[0] in {"uploads", "thumbs", "exports"}:
+        return
+    raise HTTPException(status_code=400, detail=f"Unsupported backup path: {name}")
+
+
+def copy_restored_folder(temp_root: Path, source_name: str, target: Path) -> None:
+    source = temp_root / source_name
+    if not source.exists():
+        return
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(source, target)
+
+
+def restore_from_backup(upload: UploadFile) -> dict[str, Any]:
+    ensure_dirs()
+    safety = create_backup("screenwork-pre-restore")
+    with tempfile.TemporaryDirectory(prefix="screenwork-restore-") as temp_name:
+        temp_root = Path(temp_name)
+        backup_file = temp_root / "restore.zip"
+        with backup_file.open("wb") as handle:
+            shutil.copyfileobj(upload.file, handle)
+        try:
+            with zipfile.ZipFile(backup_file) as archive:
+                for member in archive.infolist():
+                    validate_restore_member(member)
+                archive.extractall(temp_root)
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=400, detail="Invalid backup ZIP") from exc
+
+        restored_db = temp_root / "screenwork.db"
+        if restored_db.exists():
+            shutil.copy2(restored_db, DB_PATH)
+        copy_restored_folder(temp_root, "uploads", UPLOAD_DIR)
+        copy_restored_folder(temp_root, "thumbs", THUMB_DIR)
+        copy_restored_folder(temp_root, "exports", EXPORT_DIR)
+    init_db()
+    return {"ok": True, "safety_backup": safety["name"]}
+
+
 def save_thumbnail(source_path: Path, thumb_path: Path) -> tuple[int | None, int | None]:
     with Image.open(source_path) as image:
         width, height = image.size
@@ -1349,6 +1456,35 @@ def save_settings(payload: SettingsPatch) -> dict[str, bool]:
                 (key, value.strip()),
             )
     return {"ok": True}
+
+
+@app.get("/api/backups")
+def list_backups() -> dict[str, list[dict[str, Any]]]:
+    ensure_dirs()
+    backups = sorted(
+        (backup_metadata(path) for path in BACKUP_DIR.glob("*.zip") if path.is_file()),
+        key=lambda item: item["created_at"],
+        reverse=True,
+    )
+    return {"backups": backups}
+
+
+@app.post("/api/backups")
+def create_backup_endpoint() -> dict[str, Any]:
+    return create_backup()
+
+
+@app.get("/api/backups/{name}")
+def download_backup(name: str) -> FileResponse:
+    path = get_backup_path(name)
+    return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+@app.post("/api/restore")
+def restore_backup(file: UploadFile = File(...)) -> dict[str, Any]:
+    if not file.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Restore file must be a ZIP backup")
+    return restore_from_backup(file)
 
 
 @app.post("/api/export")

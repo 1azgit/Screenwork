@@ -133,15 +133,28 @@
     <dialog id="settingsDialog" class="modal">
       <form method="dialog" class="modal-body">
         <h2>设置</h2>
-        <label>Metapi 地址<input id="metapiBaseUrl" class="control" placeholder="http://127.0.0.1:3000" /></label>
-        <label>模型名<input id="metapiModel" class="control" placeholder="gpt-4o-mini" /></label>
-        <label>接口类型
-          <select id="metapiProvider" class="control">
-            <option value="openai">OpenAI Compatible</option>
-            <option value="claude">Claude Compatible</option>
-          </select>
-        </label>
-        <label>API Key<input id="metapiApiKey" class="control" type="password" placeholder="留空则使用环境变量" /></label>
+        <section class="settings-section">
+          <h3>Metapi</h3>
+          <label>Metapi 地址<input id="metapiBaseUrl" class="control" placeholder="http://127.0.0.1:3000" /></label>
+          <label>模型名<input id="metapiModel" class="control" placeholder="gpt-4o-mini" /></label>
+          <label>接口类型
+            <select id="metapiProvider" class="control">
+              <option value="openai">OpenAI Compatible</option>
+              <option value="claude">Claude Compatible</option>
+            </select>
+          </label>
+          <label>API Key<input id="metapiApiKey" class="control" type="password" placeholder="留空则使用环境变量" /></label>
+        </section>
+        <section class="settings-section">
+          <h3>备份恢复</h3>
+          <div class="backup-actions">
+            <button id="createBackupButton" class="button" type="button">创建备份</button>
+            <label class="restore-file">恢复文件<input id="restoreInput" class="control" type="file" accept=".zip,application/zip" /></label>
+            <button id="restoreBackupButton" class="button danger-button" type="button">恢复备份</button>
+          </div>
+          <div id="backupStatus" class="backup-status"></div>
+          <div id="backupList" class="backup-list"></div>
+        </section>
         <div class="modal-actions">
           <button id="saveSettingsButton" class="button primary" value="default">保存</button>
           <button class="button" value="cancel">关闭</button>
