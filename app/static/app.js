@@ -14,6 +14,12 @@ const state = {
     zoom: 1,
     infoVisible: false,
   },
+  annotation: {
+    image: null,
+    items: [],
+    tool: "box",
+    drawing: null,
+  },
 };
 
 const PRIORITIES = ["", "高价值", "待验证", "可立即开发"];
@@ -424,6 +430,7 @@ function renderDetail(image) {
         星标 / 收藏
       </label>
       <div class="muted-line">AI 状态：${escapeHtml(image.ai_status || "未识别")}${image.ai_error ? ` / ${escapeHtml(image.ai_error)}` : ""}</div>
+      <div class="muted-line">局部标注：${(image.annotations || []).length} 个</div>
       <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
       <label>内容<textarea id="detailNote" class="control">${escapeHtml(image.note || "")}</textarea></label>
       <label>AI 扩写<textarea id="detailExpanded" class="control">${escapeHtml(image.expanded_note || "")}</textarea></label>
@@ -431,6 +438,7 @@ function renderDetail(image) {
         <button class="button primary" type="submit">保存</button>
         <button id="organizeButton" class="button" type="button">AI 识别</button>
         <button id="expandButton" class="button" type="button">AI 扩写</button>
+        <button id="annotateButton" class="button" type="button">图片标注</button>
       </div>
     </form>
   `;
@@ -441,6 +449,7 @@ function renderDetail(image) {
   panel.querySelector(".detail-image").onclick = () => openLightbox(image);
   $("organizeButton").onclick = async () => organizeImage(image.id);
   $("expandButton").onclick = async () => expandNote(image.id);
+  $("annotateButton").onclick = () => openAnnotationEditor(image);
 }
 
 async function saveDetail(id) {
@@ -455,6 +464,7 @@ async function saveDetail(id) {
     tags: $("detailTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
     note: $("detailNote").value,
     expanded_note: $("detailExpanded").value,
+    annotations: state.annotation.image?.id === id ? state.annotation.items : undefined,
   };
   try {
     const image = await api(`/api/images/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -1016,6 +1026,7 @@ function renderLightboxInfo() {
       <dt>状态</dt><dd>${escapeHtml(statusLabel(image.status || "new"))}</dd>
       <dt>上传时间</dt><dd>${escapeHtml(formatDateTime(image.created_at))}</dd>
       <dt>来源时间</dt><dd>${escapeHtml(image.source_time ? formatDateTime(image.source_time) : "未填写")}</dd>
+      <dt>局部标注</dt><dd>${(image.annotations || []).length} 个</dd>
       <dt>星标</dt><dd>${image.starred ? "是" : "否"}</dd>
       <dt>优先级</dt><dd>${escapeHtml(image.priority || "未设置")}</dd>
       <dt>尺寸</dt><dd>${escapeHtml(dimensions)}</dd>
@@ -1025,6 +1036,229 @@ function renderLightboxInfo() {
     </dl>
     <p>${escapeHtml(image.note || image.expanded_note || "没有内容标注")}</p>
   `;
+}
+
+function openAnnotationEditor(image) {
+  state.annotation.image = image;
+  state.annotation.items = JSON.parse(JSON.stringify(image.annotations || []));
+  state.annotation.tool = "box";
+  state.annotation.drawing = null;
+  $("annotationImage").src = image.image_url;
+  $("annotationTextInput").value = "";
+  $("annotationEditor").hidden = false;
+  setAnnotationTool("box");
+  renderAnnotationList();
+  $("annotationImage").onload = renderAnnotationSvg;
+  setTimeout(renderAnnotationSvg, 0);
+}
+
+function closeAnnotationEditor() {
+  $("annotationEditor").hidden = true;
+  state.annotation.image = null;
+  state.annotation.items = [];
+  state.annotation.drawing = null;
+}
+
+function setAnnotationTool(tool) {
+  state.annotation.tool = tool;
+  $("annotationBoxTool").classList.toggle("primary", tool === "box");
+  $("annotationArrowTool").classList.toggle("primary", tool === "arrow");
+  $("annotationTextTool").classList.toggle("primary", tool === "text");
+}
+
+function annotationPoint(event) {
+  const rect = $("annotationSvg").getBoundingClientRect();
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
+}
+
+function startAnnotation(event) {
+  if (!state.annotation.image) return;
+  const point = annotationPoint(event);
+  const text = $("annotationTextInput").value.trim();
+  if (state.annotation.tool === "text") {
+    state.annotation.items.push({ type: "text", x: point.x, y: point.y, text: text || "文字备注" });
+    $("annotationTextInput").value = "";
+    renderAnnotationEditor();
+    return;
+  }
+  state.annotation.drawing = {
+    type: state.annotation.tool,
+    start: point,
+    current: point,
+    text,
+  };
+}
+
+function moveAnnotation(event) {
+  if (!state.annotation.drawing) return;
+  state.annotation.drawing.current = annotationPoint(event);
+  renderAnnotationSvg();
+}
+
+function finishAnnotation() {
+  const drawing = state.annotation.drawing;
+  if (!drawing) return;
+  state.annotation.drawing = null;
+  const { start, current } = drawing;
+  if (Math.abs(start.x - current.x) < 0.01 && Math.abs(start.y - current.y) < 0.01) {
+    renderAnnotationSvg();
+    return;
+  }
+  if (drawing.type === "box") {
+    state.annotation.items.push({
+      type: "box",
+      x: Math.min(start.x, current.x),
+      y: Math.min(start.y, current.y),
+      w: Math.abs(start.x - current.x),
+      h: Math.abs(start.y - current.y),
+      text: drawing.text,
+    });
+  } else {
+    state.annotation.items.push({
+      type: "arrow",
+      x1: start.x,
+      y1: start.y,
+      x2: current.x,
+      y2: current.y,
+      text: drawing.text,
+    });
+  }
+  $("annotationTextInput").value = "";
+  renderAnnotationEditor();
+}
+
+function renderAnnotationEditor() {
+  renderAnnotationSvg();
+  renderAnnotationList();
+}
+
+function renderAnnotationSvg() {
+  const svg = $("annotationSvg");
+  positionAnnotationSvg();
+  const rect = svg.getBoundingClientRect();
+  const width = Math.max(rect.width, 1);
+  const height = Math.max(rect.height, 1);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.innerHTML = `
+    <defs>
+      <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+        <path d="M0,0 L0,6 L9,3 z" fill="#f97316"></path>
+      </marker>
+    </defs>
+  `;
+  const items = [...state.annotation.items];
+  if (state.annotation.drawing) items.push(annotationDraft(state.annotation.drawing));
+  for (const item of items) svg.appendChild(annotationElement(item, width, height));
+}
+
+function positionAnnotationSvg() {
+  const image = $("annotationImage");
+  const svg = $("annotationSvg");
+  const rect = image.getBoundingClientRect();
+  const parentRect = image.parentElement.getBoundingClientRect();
+  Object.assign(svg.style, {
+    left: `${rect.left - parentRect.left}px`,
+    top: `${rect.top - parentRect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  });
+}
+
+function annotationDraft(drawing) {
+  const { start, current, text, type } = drawing;
+  if (type === "box") {
+    return {
+      type,
+      x: Math.min(start.x, current.x),
+      y: Math.min(start.y, current.y),
+      w: Math.abs(start.x - current.x),
+      h: Math.abs(start.y - current.y),
+      text,
+    };
+  }
+  return { type, x1: start.x, y1: start.y, x2: current.x, y2: current.y, text };
+}
+
+function annotationElement(item, width, height) {
+  const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  group.classList.add("annotation-shape");
+  if (item.type === "box") {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", item.x * width);
+    rect.setAttribute("y", item.y * height);
+    rect.setAttribute("width", item.w * width);
+    rect.setAttribute("height", item.h * height);
+    group.appendChild(rect);
+    addAnnotationText(group, item.text, item.x * width + 8, item.y * height + 18);
+  } else if (item.type === "arrow") {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", item.x1 * width);
+    line.setAttribute("y1", item.y1 * height);
+    line.setAttribute("x2", item.x2 * width);
+    line.setAttribute("y2", item.y2 * height);
+    line.setAttribute("marker-end", "url(#arrowHead)");
+    group.appendChild(line);
+    addAnnotationText(group, item.text, item.x2 * width + 8, item.y2 * height - 8);
+  } else {
+    addAnnotationText(group, item.text || "文字备注", item.x * width, item.y * height);
+  }
+  return group;
+}
+
+function addAnnotationText(group, value, x, y) {
+  if (!value) return;
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("x", x);
+  text.setAttribute("y", y);
+  text.textContent = value;
+  group.appendChild(text);
+}
+
+function renderAnnotationList() {
+  const list = $("annotationList");
+  list.innerHTML = "";
+  if (!state.annotation.items.length) {
+    list.innerHTML = '<div class="muted-line">还没有标注</div>';
+    return;
+  }
+  state.annotation.items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "annotation-row";
+    row.innerHTML = `
+      <span>${index + 1}. ${escapeHtml(annotationLabel(item))}</span>
+      <button class="small-button" type="button">×</button>
+    `;
+    row.querySelector("button").onclick = () => {
+      state.annotation.items.splice(index, 1);
+      renderAnnotationEditor();
+    };
+    list.appendChild(row);
+  });
+}
+
+function annotationLabel(item) {
+  const type = { box: "框", arrow: "箭头", text: "文字" }[item.type] || "标注";
+  return `${type}${item.text ? `：${item.text}` : ""}`;
+}
+
+async function saveAnnotations() {
+  const image = state.annotation.image;
+  if (!image) return;
+  try {
+    const updated = await api(`/api/images/${image.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ annotations: state.annotation.items }),
+    });
+    closeAnnotationEditor();
+    renderDetail(updated);
+    await loadImages();
+    setStatus("标注已保存");
+  } catch (error) {
+    setStatus(error.message);
+  }
 }
 
 function zoomLightbox(event) {
@@ -1184,6 +1418,20 @@ $("lightboxImage").onwheel = zoomLightbox;
 $("lightboxImage").onclick = (event) => event.stopPropagation();
 $("lightboxStage").onclick = closeLightbox;
 document.addEventListener("keydown", handleLightboxKeydown);
+$("annotationBoxTool").onclick = () => setAnnotationTool("box");
+$("annotationArrowTool").onclick = () => setAnnotationTool("arrow");
+$("annotationTextTool").onclick = () => setAnnotationTool("text");
+$("annotationUndo").onclick = () => {
+  state.annotation.items.pop();
+  renderAnnotationEditor();
+};
+$("annotationSave").onclick = saveAnnotations;
+$("annotationClose").onclick = closeAnnotationEditor;
+$("annotationSvg").onpointerdown = startAnnotation;
+$("annotationSvg").onpointermove = moveAnnotation;
+$("annotationSvg").onpointerup = finishAnnotation;
+$("annotationSvg").onpointerleave = finishAnnotation;
+window.addEventListener("resize", renderAnnotationSvg);
 updateViewButtons();
 
 Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));

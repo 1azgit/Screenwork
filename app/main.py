@@ -93,6 +93,7 @@ def init_db() -> None:
                 note TEXT NOT NULL DEFAULT '',
                 expanded_note TEXT NOT NULL DEFAULT '',
                 source_time TEXT NOT NULL DEFAULT '',
+                annotations_json TEXT NOT NULL DEFAULT '[]',
                 status TEXT NOT NULL DEFAULT 'new',
                 priority TEXT NOT NULL DEFAULT '',
                 starred INTEGER NOT NULL DEFAULT 0,
@@ -154,6 +155,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE images ADD COLUMN ai_error TEXT NOT NULL DEFAULT ''")
         if "source_time" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN source_time TEXT NOT NULL DEFAULT ''")
+        if "annotations_json" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'")
         conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
         work_columns = {row["name"] for row in conn.execute("PRAGMA table_info(work_groups)").fetchall()}
         if "priority" not in work_columns:
@@ -188,6 +191,7 @@ class ImagePatch(BaseModel):
     note: Optional[str] = None
     expanded_note: Optional[str] = None
     source_time: Optional[str] = None
+    annotations: Optional[list[dict[str, Any]]] = None
     status: Optional[str] = None
     priority: Optional[str] = None
     starred: Optional[bool] = None
@@ -487,6 +491,11 @@ def attach_image_urls(image: dict[str, Any], tags: list[str] | None = None) -> d
     image["thumb_url"] = f"/thumbs/{image['thumb_filename']}"
     image["tags"] = tags or []
     image["starred"] = bool(image.get("starred", 0))
+    raw_annotations = image.pop("annotations_json", "[]")
+    try:
+        image["annotations"] = json.loads(raw_annotations or "[]")
+    except json.JSONDecodeError:
+        image["annotations"] = []
     return image
 
 
@@ -568,6 +577,7 @@ EXPORT_FIELDS = [
     "note",
     "expanded_note",
     "source_time",
+    "annotations",
     "status",
     "priority",
     "starred",
@@ -593,6 +603,10 @@ def selected_images_for_export(ids: list[int]) -> list[dict[str, Any]]:
             item = dict(row)
             item["starred"] = bool(item.get("starred", 0))
             item["tags"] = get_image_tags(conn, item["id"])
+            try:
+                item["annotations"] = json.loads(item.pop("annotations_json", "[]") or "[]")
+            except json.JSONDecodeError:
+                item["annotations"] = []
             images.append(item)
         return images
 
@@ -605,6 +619,7 @@ def export_row(image: dict[str, Any]) -> dict[str, Any]:
         "note": image["note"],
         "expanded_note": image["expanded_note"],
         "source_time": image["source_time"],
+        "annotations": json.dumps(image.get("annotations") or [], ensure_ascii=False),
         "status": image["status"],
         "priority": image["priority"],
         "starred": "yes" if image["starred"] else "no",
@@ -624,6 +639,7 @@ def csv_text(images: list[dict[str, Any]], notion: bool = False) -> str:
             "Tags",
             "Summary",
             "Idea",
+            "Annotations",
             "Source Time",
             "Upload Time",
             "Original File",
@@ -640,6 +656,7 @@ def csv_text(images: list[dict[str, Any]], notion: bool = False) -> str:
                     "Tags": ",".join(image["tags"]),
                     "Summary": image["note"],
                     "Idea": image["expanded_note"],
+                    "Annotations": annotation_summary(image),
                     "Source Time": image["source_time"],
                     "Upload Time": image["created_at"],
                     "Original File": image["original_name"],
@@ -668,6 +685,7 @@ def markdown_text(images: list[dict[str, Any]]) -> str:
                 f"- TAG: {', '.join(image['tags']) or '无'}",
                 f"- 来源时间: {image['source_time'] or '未填写'}",
                 f"- 上传时间: {image['created_at']}",
+                f"- 局部标注: {annotation_summary(image) or '无'}",
                 "",
                 "### 摘要",
                 image["note"] or "无",
@@ -682,8 +700,14 @@ def markdown_text(images: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def annotation_summary(image: dict[str, Any]) -> str:
+    annotations = image.get("annotations") or []
+    labels = [str(item.get("text") or item.get("type") or "") for item in annotations]
+    return "；".join(label for label in labels if label)
+
+
 def excel_html(images: list[dict[str, Any]]) -> str:
-    headers = ["标题", "状态", "优先级", "星标", "TAG", "摘要", "可开发点子", "来源时间", "上传时间", "原文件"]
+    headers = ["标题", "状态", "优先级", "星标", "TAG", "摘要", "可开发点子", "局部标注", "来源时间", "上传时间", "原文件"]
     rows = []
     for image in images:
         rows.append(
@@ -695,6 +719,7 @@ def excel_html(images: list[dict[str, Any]]) -> str:
                 ",".join(image["tags"]),
                 image["note"],
                 image["expanded_note"],
+                annotation_summary(image),
                 image["source_time"],
                 image["created_at"],
                 image["original_name"],
@@ -1015,6 +1040,9 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
                 elif field == "source_time":
                     value = (value or "").strip()[:40]
                 params.append(value)
+        if "annotations" in fields:
+            updates.append("annotations_json = ?")
+            params.append(json.dumps(payload.annotations or [], ensure_ascii=False))
         if updates:
             updates.append("updated_at = ?")
             params.extend([now_iso(), image_id])

@@ -108,6 +108,28 @@
       <aside id="lightboxInfo" class="lightbox-info" hidden></aside>
     </div>
 
+    <div id="annotationEditor" class="annotation-editor" hidden>
+      <div class="annotation-toolbar">
+        <button id="annotationBoxTool" class="button primary" type="button">画框</button>
+        <button id="annotationArrowTool" class="button" type="button">箭头</button>
+        <input id="annotationTextInput" class="control annotation-text-input" placeholder="文字备注" />
+        <button id="annotationTextTool" class="button" type="button">添加文字</button>
+        <button id="annotationUndo" class="button" type="button">撤销</button>
+        <button id="annotationSave" class="button primary" type="button">保存</button>
+        <button id="annotationClose" class="button" type="button">关闭</button>
+      </div>
+      <div class="annotation-stage">
+        <div class="annotation-canvas-wrap">
+          <img id="annotationImage" alt="" />
+          <svg id="annotationSvg"></svg>
+        </div>
+        <aside class="annotation-side">
+          <h2>局部标注</h2>
+          <div id="annotationList" class="annotation-list"></div>
+        </aside>
+      </div>
+    </div>
+
     <dialog id="settingsDialog" class="modal">
       <form method="dialog" class="modal-body">
         <h2>设置</h2>
