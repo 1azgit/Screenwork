@@ -598,6 +598,10 @@ body.lightbox-open {
   overflow-wrap: anywhere;
 }
 
+.lightbox-info a {
+  color: var(--accent-dark);
+}
+
 .lightbox-info p {
   margin: 0;
   color: var(--muted);
@@ -612,6 +616,12 @@ body.lightbox-open {
   grid-template-rows: auto 1fr;
   background: #101820;
   color: #f8fafc;
+}
+
+.source-record-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 
 .annotation-editor[hidden] {
@@ -1170,6 +1180,10 @@ textarea.control {
 
   .detail {
     min-height: 300px;
+  }
+
+  .source-record-grid {
+    grid-template-columns: 1fr;
   }
 
   .toolbar {

@@ -97,6 +97,10 @@ def init_db() -> None:
                 note TEXT NOT NULL DEFAULT '',
                 expanded_note TEXT NOT NULL DEFAULT '',
                 source_time TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                source_platform TEXT NOT NULL DEFAULT '',
+                source_author TEXT NOT NULL DEFAULT '',
+                source_keywords TEXT NOT NULL DEFAULT '',
                 annotations_json TEXT NOT NULL DEFAULT '[]',
                 status TEXT NOT NULL DEFAULT 'new',
                 priority TEXT NOT NULL DEFAULT '',
@@ -159,6 +163,14 @@ def init_db() -> None:
             conn.execute("ALTER TABLE images ADD COLUMN ai_error TEXT NOT NULL DEFAULT ''")
         if "source_time" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN source_time TEXT NOT NULL DEFAULT ''")
+        if "source_url" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_url TEXT NOT NULL DEFAULT ''")
+        if "source_platform" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_platform TEXT NOT NULL DEFAULT ''")
+        if "source_author" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_author TEXT NOT NULL DEFAULT ''")
+        if "source_keywords" not in image_columns:
+            conn.execute("ALTER TABLE images ADD COLUMN source_keywords TEXT NOT NULL DEFAULT ''")
         if "annotations_json" not in image_columns:
             conn.execute("ALTER TABLE images ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'")
         conn.execute("UPDATE images SET source_size = size WHERE source_size IS NULL")
@@ -195,6 +207,10 @@ class ImagePatch(BaseModel):
     note: Optional[str] = None
     expanded_note: Optional[str] = None
     source_time: Optional[str] = None
+    source_url: Optional[str] = None
+    source_platform: Optional[str] = None
+    source_author: Optional[str] = None
+    source_keywords: Optional[str] = None
     annotations: Optional[list[dict[str, Any]]] = None
     status: Optional[str] = None
     priority: Optional[str] = None
@@ -581,6 +597,10 @@ EXPORT_FIELDS = [
     "note",
     "expanded_note",
     "source_time",
+    "source_url",
+    "source_platform",
+    "source_author",
+    "source_keywords",
     "annotations",
     "status",
     "priority",
@@ -623,6 +643,10 @@ def export_row(image: dict[str, Any]) -> dict[str, Any]:
         "note": image["note"],
         "expanded_note": image["expanded_note"],
         "source_time": image["source_time"],
+        "source_url": image["source_url"],
+        "source_platform": image["source_platform"],
+        "source_author": image["source_author"],
+        "source_keywords": image["source_keywords"],
         "annotations": json.dumps(image.get("annotations") or [], ensure_ascii=False),
         "status": image["status"],
         "priority": image["priority"],
@@ -645,6 +669,10 @@ def csv_text(images: list[dict[str, Any]], notion: bool = False) -> str:
             "Idea",
             "Annotations",
             "Source Time",
+            "Source URL",
+            "Platform",
+            "Author",
+            "Keywords",
             "Upload Time",
             "Original File",
         ]
@@ -662,6 +690,10 @@ def csv_text(images: list[dict[str, Any]], notion: bool = False) -> str:
                     "Idea": image["expanded_note"],
                     "Annotations": annotation_summary(image),
                     "Source Time": image["source_time"],
+                    "Source URL": image["source_url"],
+                    "Platform": image["source_platform"],
+                    "Author": image["source_author"],
+                    "Keywords": image["source_keywords"],
                     "Upload Time": image["created_at"],
                     "Original File": image["original_name"],
                 }
@@ -688,6 +720,10 @@ def markdown_text(images: list[dict[str, Any]]) -> str:
                 f"- 星标: {'是' if image['starred'] else '否'}",
                 f"- TAG: {', '.join(image['tags']) or '无'}",
                 f"- 来源时间: {image['source_time'] or '未填写'}",
+                f"- 来源链接: {image['source_url'] or '未填写'}",
+                f"- 平台: {image['source_platform'] or '未填写'}",
+                f"- 作者: {image['source_author'] or '未填写'}",
+                f"- 关键词: {image['source_keywords'] or '未填写'}",
                 f"- 上传时间: {image['created_at']}",
                 f"- 局部标注: {annotation_summary(image) or '无'}",
                 "",
@@ -711,7 +747,23 @@ def annotation_summary(image: dict[str, Any]) -> str:
 
 
 def excel_html(images: list[dict[str, Any]]) -> str:
-    headers = ["标题", "状态", "优先级", "星标", "TAG", "摘要", "可开发点子", "局部标注", "来源时间", "上传时间", "原文件"]
+    headers = [
+        "标题",
+        "状态",
+        "优先级",
+        "星标",
+        "TAG",
+        "摘要",
+        "可开发点子",
+        "局部标注",
+        "来源时间",
+        "来源链接",
+        "平台",
+        "作者",
+        "关键词",
+        "上传时间",
+        "原文件",
+    ]
     rows = []
     for image in images:
         rows.append(
@@ -725,6 +777,10 @@ def excel_html(images: list[dict[str, Any]]) -> str:
                 image["expanded_note"],
                 annotation_summary(image),
                 image["source_time"],
+                image["source_url"],
+                image["source_platform"],
+                image["source_author"],
+                image["source_keywords"],
                 image["created_at"],
                 image["original_name"],
             ]
@@ -1071,6 +1127,10 @@ def list_images(
                     lower(i.title) LIKE ?
                     OR lower(i.note) LIKE ?
                     OR lower(i.expanded_note) LIKE ?
+                    OR lower(i.source_url) LIKE ?
+                    OR lower(i.source_platform) LIKE ?
+                    OR lower(i.source_author) LIKE ?
+                    OR lower(i.source_keywords) LIKE ?
                     OR EXISTS (
                         SELECT 1
                         FROM image_tags sit
@@ -1080,7 +1140,7 @@ def list_images(
                 )
                 """
             )
-            params.extend([like, like, like, like])
+            params.extend([like, like, like, like, like, like, like, like])
     if no_content:
         where.append("trim(i.note) = '' AND trim(i.expanded_note) = ''")
     if tag:
@@ -1134,7 +1194,20 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
             get_category_depth(conn, payload.category_id)
         updates = []
         params: list[Any] = []
-        for field in ("title", "note", "expanded_note", "source_time", "status", "priority", "starred", "category_id"):
+        for field in (
+            "title",
+            "note",
+            "expanded_note",
+            "source_time",
+            "source_url",
+            "source_platform",
+            "source_author",
+            "source_keywords",
+            "status",
+            "priority",
+            "starred",
+            "category_id",
+        ):
             if field in fields:
                 updates.append(f"{field} = ?")
                 value = getattr(payload, field)
@@ -1146,6 +1219,8 @@ def update_image(image_id: int, payload: ImagePatch) -> dict[str, Any]:
                     value = 1 if value else 0
                 elif field == "source_time":
                     value = (value or "").strip()[:40]
+                elif field.startswith("source_"):
+                    value = (value or "").strip()
                 params.append(value)
         if "annotations" in fields:
             updates.append("annotations_json = ?")

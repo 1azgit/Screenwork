@@ -428,6 +428,12 @@ function renderDetail(image) {
         </select>
       </label>
       <label>来源时间<input id="detailSourceTime" class="control" type="datetime-local" value="${escapeAttr(toDateTimeLocalValue(image.source_time))}" /></label>
+      <div class="source-record-grid">
+        <label>视频链接<input id="detailSourceUrl" class="control" type="url" value="${escapeAttr(image.source_url || "")}" placeholder="https://..." /></label>
+        <label>平台<input id="detailSourcePlatform" class="control" value="${escapeAttr(image.source_platform || "")}" placeholder="抖音 / 小红书 / B站" /></label>
+        <label>作者<input id="detailSourceAuthor" class="control" value="${escapeAttr(image.source_author || "")}" /></label>
+        <label>关键词<input id="detailSourceKeywords" class="control" value="${escapeAttr(image.source_keywords || "")}" placeholder="逗号或空格分隔" /></label>
+      </div>
       <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
       <label class="inline-check form-check">
         <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
@@ -466,6 +472,10 @@ async function saveDetail(id) {
     title: $("detailTitle").value,
     category_id: categoryValue ? Number(categoryValue) : null,
     source_time: $("detailSourceTime").value,
+    source_url: $("detailSourceUrl").value,
+    source_platform: $("detailSourcePlatform").value,
+    source_author: $("detailSourceAuthor").value,
+    source_keywords: $("detailSourceKeywords").value,
     status: $("detailStatus").value,
     priority: $("detailPriority").value,
     starred: $("detailStarred").checked,
@@ -1106,6 +1116,10 @@ function renderLightboxInfo() {
       <dt>状态</dt><dd>${escapeHtml(statusLabel(image.status || "new"))}</dd>
       <dt>上传时间</dt><dd>${escapeHtml(formatDateTime(image.created_at))}</dd>
       <dt>来源时间</dt><dd>${escapeHtml(image.source_time ? formatDateTime(image.source_time) : "未填写")}</dd>
+      <dt>来源链接</dt><dd>${sourceLinkHtml(image.source_url)}</dd>
+      <dt>平台</dt><dd>${escapeHtml(image.source_platform || "未填写")}</dd>
+      <dt>作者</dt><dd>${escapeHtml(image.source_author || "未填写")}</dd>
+      <dt>关键词</dt><dd>${escapeHtml(image.source_keywords || "未填写")}</dd>
       <dt>局部标注</dt><dd>${(image.annotations || []).length} 个</dd>
       <dt>星标</dt><dd>${image.starred ? "是" : "否"}</dd>
       <dt>优先级</dt><dd>${escapeHtml(image.priority || "未设置")}</dd>
@@ -1491,6 +1505,13 @@ function statusOptions(value = "new") {
 
 function statusLabel(value = "new") {
   return STATUSES.find(([status]) => status === value)?.[1] || value;
+}
+
+function sourceLinkHtml(value) {
+  const url = String(value || "").trim();
+  if (!url) return "未填写";
+  if (!/^https?:\/\//i.test(url)) return escapeHtml(url);
+  return `<a href="${escapeAttr(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>`;
 }
 
 function renderPriorityBadges(item) {
