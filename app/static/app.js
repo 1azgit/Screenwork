@@ -415,40 +415,50 @@ function renderDetail(image) {
     .join("");
   panel.className = "detail";
   panel.innerHTML = `
-    <div class="detail-image-wrap">
-      <img class="detail-image" src="${image.image_url}" alt="${escapeHtml(image.title)}" />
-      <svg class="detail-annotation-svg annotation-overlay"></svg>
-    </div>
     <form id="detailForm">
-      <label>标题<input id="detailTitle" class="control" value="${escapeAttr(image.title)}" /></label>
-      <label>分类<select id="detailCategory" class="control">${categoryOptions}</select></label>
-      <label>状态
-        <select id="detailStatus" class="control">
-          ${statusOptions(image.status)}
-        </select>
-      </label>
-      <label>来源时间<input id="detailSourceTime" class="control" type="datetime-local" value="${escapeAttr(toDateTimeLocalValue(image.source_time))}" /></label>
-      <div class="source-record-grid">
-        <label>视频链接<input id="detailSourceUrl" class="control" type="url" value="${escapeAttr(image.source_url || "")}" placeholder="https://..." /></label>
-        <label>平台<input id="detailSourcePlatform" class="control" value="${escapeAttr(image.source_platform || "")}" placeholder="抖音 / 小红书 / B站" /></label>
-        <label>作者<input id="detailSourceAuthor" class="control" value="${escapeAttr(image.source_author || "")}" /></label>
-        <label>关键词<input id="detailSourceKeywords" class="control" value="${escapeAttr(image.source_keywords || "")}" placeholder="逗号或空格分隔" /></label>
-      </div>
-      <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
-      <label class="inline-check form-check">
-        <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
-        星标 / 收藏
-      </label>
-      <div class="muted-line">AI 状态：${escapeHtml(image.ai_status || "未识别")}${image.ai_error ? ` / ${escapeHtml(image.ai_error)}` : ""}</div>
-      <div class="muted-line">局部标注：${(image.annotations || []).length} 个</div>
-      <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
-      <label>内容<textarea id="detailNote" class="control">${escapeHtml(image.note || "")}</textarea></label>
-      <label>AI 扩写<textarea id="detailExpanded" class="control">${escapeHtml(image.expanded_note || "")}</textarea></label>
-      <div class="actions">
-        <button class="button primary" type="submit">保存</button>
-        <button id="organizeButton" class="button" type="button">AI 识别</button>
-        <button id="expandButton" class="button" type="button">AI 扩写</button>
-        <button id="annotateButton" class="button" type="button">图片标注</button>
+      <div class="detail-editor">
+        <aside class="detail-side-panel">
+          <div class="detail-side-tab">更多信息</div>
+          <div class="detail-side-content">
+            <h3>来源记录</h3>
+            <label>状态
+              <select id="detailStatus" class="control">
+                ${statusOptions(image.status)}
+              </select>
+            </label>
+            <label>来源时间<input id="detailSourceTime" class="control" type="datetime-local" value="${escapeAttr(toDateTimeLocalValue(image.source_time))}" /></label>
+            <label>视频链接<input id="detailSourceUrl" class="control" type="url" value="${escapeAttr(image.source_url || "")}" placeholder="https://..." /></label>
+            <label>平台<input id="detailSourcePlatform" class="control" value="${escapeAttr(image.source_platform || "")}" placeholder="抖音 / 小红书 / B站" /></label>
+            <label>作者<input id="detailSourceAuthor" class="control" value="${escapeAttr(image.source_author || "")}" /></label>
+            <label>关键词<input id="detailSourceKeywords" class="control" value="${escapeAttr(image.source_keywords || "")}" placeholder="逗号或空格分隔" /></label>
+            <label class="inline-check form-check">
+              <input id="detailStarred" type="checkbox" ${image.starred ? "checked" : ""} />
+              星标 / 收藏
+            </label>
+            <div class="muted-line">AI 状态：${escapeHtml(image.ai_status || "未识别")}${image.ai_error ? ` / ${escapeHtml(image.ai_error)}` : ""}</div>
+            <div class="muted-line">局部标注：${(image.annotations || []).length} 个</div>
+          </div>
+        </aside>
+        <section class="detail-main-panel">
+          <div class="detail-image-wrap">
+            <img class="detail-image" src="${image.image_url}" alt="${escapeHtml(image.title)}" />
+            <svg class="detail-annotation-svg annotation-overlay"></svg>
+          </div>
+          <label>标题<input id="detailTitle" class="control" value="${escapeAttr(image.title)}" /></label>
+          <div class="detail-main-grid">
+            <label>分类<select id="detailCategory" class="control">${categoryOptions}</select></label>
+            <label>优先级<select id="detailPriority" class="control">${priorityOptions(image.priority)}</select></label>
+          </div>
+          <label>TAG<input id="detailTags" class="control" value="${escapeAttr((image.tags || []).join(", "))}" /></label>
+          <label>内容<textarea id="detailNote" class="control detail-note">${escapeHtml(image.note || "")}</textarea></label>
+          <label>AI 扩写<textarea id="detailExpanded" class="control detail-expanded">${escapeHtml(image.expanded_note || "")}</textarea></label>
+          <div class="actions detail-actions">
+            <button class="button primary" type="submit">保存</button>
+            <button id="organizeButton" class="button" type="button">AI 识别</button>
+            <button id="expandButton" class="button" type="button">AI 扩写</button>
+            <button id="annotateButton" class="button" type="button">图片标注</button>
+          </div>
+        </section>
       </div>
     </form>
   `;
