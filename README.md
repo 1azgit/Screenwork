@@ -67,7 +67,9 @@ Common values:
 
 ```env
 METAPI_BASE_URL=http://host.docker.internal:3000
-METAPI_MODEL=gpt-4o-mini
+METAPI_MODEL=alibaba/qwen3-vl-plus
+METAPI_MODELS=alibaba/qwen3-vl-plus,alibaba/qwen3-vl-flash,alibaba/qwen3-vl-235b-a22b-instruct
+METAPI_COMPARE_MODELS=alibaba/qwen3-vl-plus,glm-5v-turbo,deepseek-v4-vision
 METAPI_PROVIDER=openai
 METAPI_API_KEY=
 ```
@@ -80,6 +82,21 @@ When Screenwork runs inside Docker and Metapi runs directly on the same Linux ho
 - `claude`: calls `/v1/messages`.
 
 Settings can also be edited in the web UI. Environment variables take priority over UI settings.
+
+For image analysis testing, OpenAI and Anthropic/Claude models are intentionally excluded from the default model lists. Recommended visual models from the provided Metapi list:
+
+- `alibaba/qwen3-vl-plus`
+- `alibaba/qwen3-vl-flash`
+- `alibaba/qwen3-vl-235b-a22b-instruct`
+- `alibaba/qwen3-vl-235b-a22b-thinking`
+- `alibaba/qwen-vl-max`
+- `qwen-vision-pro`
+- `glm-5v-turbo`
+- `glm-4v`
+- `deepseek-v4-vision`
+- `meta/llama-3.2-90b-vision-instruct`
+
+`METAPI_MODELS` is used for batch AI organizing with fallback: Screenwork tries each model in order until one succeeds. `METAPI_COMPARE_MODELS` is used by the image detail page's multi-model comparison dialog, where each model result can be reviewed and applied manually.
 
 ## Data
 

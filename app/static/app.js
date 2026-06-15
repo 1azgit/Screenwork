@@ -21,6 +21,7 @@ const state = {
     color: "#f97316",
     drawing: null,
   },
+  compareImageId: null,
 };
 
 const PRIORITIES = ["", "高价值", "待验证", "可立即开发"];
@@ -460,6 +461,7 @@ function renderDetail(image) {
           <div class="actions detail-actions">
             <button class="button primary" type="submit">保存</button>
             <button id="organizeButton" class="button" type="button">AI 识别</button>
+            <button id="compareModelsButton" class="button" type="button">多模型对比</button>
             <button id="expandButton" class="button" type="button">AI 扩写</button>
             <button id="annotateButton" class="button" type="button">图片标注</button>
           </div>
@@ -478,6 +480,7 @@ function renderDetail(image) {
   renderAnnotationOverlay(detailSvg, image.annotations || []);
   initTagInput($("detailTags"), image.tags || []);
   $("organizeButton").onclick = async () => organizeImage(image.id);
+  $("compareModelsButton").onclick = async () => compareImageModels(image.id);
   $("expandButton").onclick = async () => expandNote(image.id);
   $("annotateButton").onclick = () => openAnnotationEditor(image);
 }
@@ -552,6 +555,75 @@ async function organizeSelectedImages() {
   } catch (error) {
     setStatus(error.message);
     await loadImages();
+  }
+}
+
+async function compareImageModels(id) {
+  state.compareImageId = id;
+  $("modelCompareStatus").textContent = "正在调用多个模型";
+  $("modelCompareList").innerHTML = "";
+  $("modelCompareDialog").showModal();
+  setStatus("正在多模型对比");
+  try {
+    const result = await api(`/api/images/${id}/compare`, { method: "POST", body: JSON.stringify({}) });
+    renderModelCompareResults(result.candidates || []);
+    const failures = (result.candidates || []).filter((item) => item.error).length;
+    setStatus(failures ? `多模型对比完成，失败 ${failures} 个` : "多模型对比完成");
+  } catch (error) {
+    $("modelCompareStatus").textContent = error.message;
+    setStatus(error.message);
+  }
+}
+
+function renderModelCompareResults(candidates) {
+  $("modelCompareStatus").textContent = candidates.length ? `${candidates.length} 个模型结果` : "没有候选结果";
+  $("modelCompareList").innerHTML = candidates
+    .map((candidate) => {
+      if (candidate.error) {
+        return `
+          <article class="compare-card failed">
+            <h3>${escapeHtml(candidate.model || "未知模型")}</h3>
+            <p>${escapeHtml(candidate.error)}</p>
+          </article>
+        `;
+      }
+      return `
+        <article class="compare-card">
+          <header>
+            <h3>${escapeHtml(candidate.model)}</h3>
+            <button class="button primary apply-candidate-button" type="button" data-id="${candidate.id}">采用</button>
+          </header>
+          <dl>
+            <dt>标题</dt><dd>${escapeHtml(candidate.title || "")}</dd>
+            <dt>优先级</dt><dd>${escapeHtml(candidate.priority || "未设置")}</dd>
+            <dt>TAG</dt><dd>${escapeHtml((candidate.tags || []).join(", "))}</dd>
+          </dl>
+          <section><strong>摘要</strong><p>${escapeHtml(candidate.summary || "")}</p></section>
+          <section><strong>可开发点子</strong><p>${escapeHtml(candidate.idea || "")}</p></section>
+        </article>
+      `;
+    })
+    .join("");
+  document.querySelectorAll(".apply-candidate-button").forEach((button) => {
+    button.onclick = () => applyModelCandidate(Number(button.dataset.id));
+  });
+}
+
+async function applyModelCandidate(candidateId) {
+  if (!state.compareImageId) return;
+  setStatus("正在采用模型结果");
+  try {
+    const image = await api(`/api/images/${state.compareImageId}/candidates/${candidateId}/apply`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    renderDetail(image);
+    await loadImages();
+    $("modelCompareDialog").close();
+    setStatus("已采用模型结果");
+  } catch (error) {
+    $("modelCompareStatus").textContent = error.message;
+    setStatus(error.message);
   }
 }
 
@@ -987,6 +1059,8 @@ async function openSettings() {
   const settings = await api("/api/settings");
   $("metapiBaseUrl").value = settings.metapi_base_url || "";
   $("metapiModel").value = settings.metapi_model || "";
+  $("metapiModels").value = settings.metapi_models || (settings.recommended_image_models || []).join("\n");
+  $("metapiCompareModels").value = settings.metapi_compare_models || (settings.recommended_image_models || []).slice(0, 3).join("\n");
   $("metapiProvider").value = settings.metapi_provider || "openai";
   $("metapiApiKey").value = "";
   $("settingsDialog").showModal();
@@ -1001,6 +1075,8 @@ async function saveSettings(event) {
       body: JSON.stringify({
         metapi_base_url: $("metapiBaseUrl").value,
         metapi_model: $("metapiModel").value,
+        metapi_models: $("metapiModels").value,
+        metapi_compare_models: $("metapiCompareModels").value,
         metapi_provider: $("metapiProvider").value,
         metapi_api_key: $("metapiApiKey").value,
       }),

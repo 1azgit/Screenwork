@@ -1040,6 +1040,77 @@ textarea.control {
   gap: 10px;
 }
 
+.compare-modal {
+  width: min(980px, calc(100vw - 28px));
+}
+
+.model-list-input {
+  min-height: 120px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.compare-list {
+  display: grid;
+  gap: 12px;
+  max-height: min(68vh, 720px);
+  overflow: auto;
+}
+
+.compare-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8faf9;
+}
+
+.compare-card.failed {
+  border-color: #f3b4ae;
+  background: #fff6f5;
+}
+
+.compare-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.compare-card h3 {
+  margin: 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.compare-card dl {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.compare-card dt {
+  color: var(--muted);
+}
+
+.compare-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.compare-card section {
+  display: grid;
+  gap: 4px;
+}
+
+.compare-card p {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 .settings-section {
   display: grid;
   gap: 10px;

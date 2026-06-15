@@ -141,6 +141,8 @@
           <h3>Metapi</h3>
           <label>Metapi 地址<input id="metapiBaseUrl" class="control" placeholder="http://127.0.0.1:3000" /></label>
           <label>模型名<input id="metapiModel" class="control" placeholder="gpt-4o-mini" /></label>
+          <label>图片整理模型列表<textarea id="metapiModels" class="control model-list-input" placeholder="一行一个模型，失败后自动切换下一个"></textarea></label>
+          <label>多模型对比列表<textarea id="metapiCompareModels" class="control model-list-input" placeholder="一行一个模型，用于人工对比"></textarea></label>
           <label>接口类型
             <select id="metapiProvider" class="control">
               <option value="openai">OpenAI Compatible</option>
@@ -161,6 +163,17 @@
         </section>
         <div class="modal-actions">
           <button id="saveSettingsButton" class="button primary" value="default">保存</button>
+          <button class="button" value="cancel">关闭</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="modelCompareDialog" class="modal compare-modal">
+      <form method="dialog" class="modal-body">
+        <h2>多模型对比</h2>
+        <div id="modelCompareStatus" class="backup-status"></div>
+        <div id="modelCompareList" class="compare-list"></div>
+        <div class="modal-actions">
           <button class="button" value="cancel">关闭</button>
         </div>
       </form>

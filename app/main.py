@@ -35,6 +35,19 @@ ALLOWED_EXTENSIONS = {".png"}
 MAX_CATEGORY_DEPTH = 3
 PRIORITY_VALUES = {"", "高价值", "待验证", "可立即开发"}
 STATUS_VALUES = {"new", "reviewing", "ready", "developing", "done"}
+RECOMMENDED_IMAGE_MODELS = [
+    "alibaba/qwen3-vl-plus",
+    "alibaba/qwen3-vl-flash",
+    "alibaba/qwen3-vl-235b-a22b-instruct",
+    "alibaba/qwen3-vl-235b-a22b-thinking",
+    "alibaba/qwen-vl-max",
+    "qwen-vision-pro",
+    "glm-5v-turbo",
+    "glm-4v",
+    "deepseek-v4-vision",
+    "meta/llama-3.2-90b-vision-instruct",
+]
+BLOCKED_IMAGE_MODEL_KEYWORDS = ("openai", "anthropic", "claude", "gpt-", "gpt_", "gptimage", "gpt-image", "codex")
 
 
 app = FastAPI(title=APP_TITLE)
@@ -125,6 +138,20 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS image_ai_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                idea TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                priority TEXT NOT NULL DEFAULT '',
+                raw_response TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS work_groups (
@@ -247,6 +274,8 @@ class DuplicateCheckIn(BaseModel):
 class SettingsPatch(BaseModel):
     metapi_base_url: str = ""
     metapi_model: str = ""
+    metapi_models: str = ""
+    metapi_compare_models: str = ""
     metapi_provider: str = "openai"
     metapi_api_key: str = ""
 
@@ -339,6 +368,39 @@ def coerce_priority(priority: str | None) -> str:
     return value if value in PRIORITY_VALUES else ""
 
 
+def recommended_image_models_text() -> str:
+    return "\n".join(RECOMMENDED_IMAGE_MODELS)
+
+
+def is_blocked_image_model(model: str) -> bool:
+    value = model.lower()
+    return any(keyword in value for keyword in BLOCKED_IMAGE_MODEL_KEYWORDS)
+
+
+def parse_model_list(value: str | None) -> list[str]:
+    models: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[\n,，;；]+", value or ""):
+        model = part.strip()
+        key = model.lower()
+        if model and key not in seen and not is_blocked_image_model(model):
+            seen.add(key)
+            models.append(model)
+    return models
+
+
+def image_model_fallbacks(settings: dict[str, str]) -> list[str]:
+    models = parse_model_list(settings.get("metapi_models"))
+    if not models and settings.get("metapi_model") and not is_blocked_image_model(settings["metapi_model"]):
+        models = [settings["metapi_model"]]
+    return models or RECOMMENDED_IMAGE_MODELS[:]
+
+
+def image_compare_models(settings: dict[str, str]) -> list[str]:
+    models = parse_model_list(settings.get("metapi_compare_models"))
+    return models or image_model_fallbacks(settings)[:3]
+
+
 def get_metapi_headers(settings: dict[str, str]) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     if settings["metapi_api_key"]:
@@ -376,9 +438,13 @@ async def call_metapi(
     prompt: str,
     image_path: Path | None = None,
     max_tokens: int = 1400,
+    model: str | None = None,
 ) -> str:
     if not settings["metapi_base_url"]:
         raise HTTPException(status_code=400, detail="Metapi base URL is not configured")
+    selected_model = (model or settings["metapi_model"]).strip()
+    if not selected_model:
+        raise HTTPException(status_code=400, detail="Metapi model is not configured")
     base_url = settings["metapi_base_url"].rstrip("/")
     provider = settings["metapi_provider"].lower()
     headers = get_metapi_headers(settings)
@@ -405,7 +471,7 @@ async def call_metapi(
                     f"{base_url}/v1/messages",
                     headers={**headers, "anthropic-version": "2023-06-01"},
                     json={
-                        "model": settings["metapi_model"],
+                        "model": selected_model,
                         "max_tokens": max_tokens,
                         "messages": [{"role": "user", "content": content}],
                     },
@@ -421,7 +487,7 @@ async def call_metapi(
                     f"{base_url}/v1/chat/completions",
                     headers=headers,
                     json={
-                        "model": settings["metapi_model"],
+                        "model": selected_model,
                         "messages": [{"role": "user", "content": content}],
                         "temperature": 0.35,
                         "max_tokens": max_tokens,
@@ -433,6 +499,99 @@ async def call_metapi(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Metapi request failed: {exc}") from exc
+
+
+def image_organize_prompt(image: dict[str, Any], tags: list[str]) -> str:
+    return (
+        "你是截图内容识别和产品点子整理助手。请观察图片并结合已有信息，生成方便人工审核的结构化结果。\n"
+        "只返回 JSON，不要 Markdown，不要解释。JSON 字段必须是：\n"
+        "title: 20字以内标题；summary: 截图内容摘要；tags: 3-8个中文短标签数组；"
+        "idea: 可开发点子，包含用途、开发方向、下一步；priority: 只能是空字符串、高价值、待验证、可立即开发之一。\n\n"
+        f"原文件名: {image['original_name']}\n"
+        f"现有标题: {image['title']}\n现有内容: {image['note']}\n现有TAG: {', '.join(tags)}"
+    )
+
+
+def normalize_ai_result(data: dict[str, Any], image: dict[str, Any], tags: list[str]) -> dict[str, Any]:
+    title = str(data.get("title") or image["title"] or Path(image["original_name"]).stem)[:160]
+    summary = str(data.get("summary") or image["note"] or "")
+    idea = str(data.get("idea") or image["expanded_note"] or "")
+    priority = coerce_priority(str(data.get("priority") or ""))
+    raw_tags = data.get("tags") or tags
+    if not isinstance(raw_tags, list):
+        raw_tags = re.split(r"[,，、\s]+", str(raw_tags))
+    return {
+        "title": title,
+        "summary": summary,
+        "idea": idea,
+        "priority": priority,
+        "tags": normalize_tags([str(tag) for tag in raw_tags]),
+    }
+
+
+async def analyze_image_with_model(
+    settings: dict[str, str],
+    image: dict[str, Any],
+    tags: list[str],
+    model: str,
+) -> dict[str, Any]:
+    content = await call_metapi(
+        settings,
+        image_organize_prompt(image, tags),
+        UPLOAD_DIR / image["filename"],
+        max_tokens=1600,
+        model=model,
+    )
+    data = extract_json_object(content)
+    result = normalize_ai_result(data, image, tags)
+    result["model"] = model
+    result["raw_response"] = content
+    return result
+
+
+def store_ai_candidate(image_id: int, result: dict[str, Any], error: str = "") -> dict[str, Any]:
+    with db() as conn:
+        created_at = now_iso()
+        cur = conn.execute(
+            """
+            INSERT INTO image_ai_candidates (
+                image_id, model, title, summary, idea, tags_json, priority, raw_response, error, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                image_id,
+                result.get("model", ""),
+                result.get("title", ""),
+                result.get("summary", ""),
+                result.get("idea", ""),
+                json.dumps(result.get("tags") or [], ensure_ascii=False),
+                coerce_priority(result.get("priority")),
+                result.get("raw_response", ""),
+                error[:1000],
+                created_at,
+            ),
+        )
+        return {
+            "id": cur.lastrowid,
+            "image_id": image_id,
+            "model": result.get("model", ""),
+            "title": result.get("title", ""),
+            "summary": result.get("summary", ""),
+            "idea": result.get("idea", ""),
+            "tags": result.get("tags") or [],
+            "priority": coerce_priority(result.get("priority")),
+            "error": error[:1000],
+            "created_at": created_at,
+        }
+
+
+def candidate_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    try:
+        item["tags"] = json.loads(item.pop("tags_json") or "[]")
+    except json.JSONDecodeError:
+        item["tags"] = []
+    return item
 
 
 def set_image_ai_state(image_id: int, status: str, error: str = "") -> None:
@@ -453,24 +612,20 @@ async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
         image = dict(row)
         tags = get_image_tags(conn, image_id)
 
-    prompt = (
-        "你是截图内容识别和产品点子整理助手。请观察图片并结合已有信息，生成方便人工审核的结构化结果。\n"
-        "只返回 JSON，不要 Markdown，不要解释。JSON 字段必须是：\n"
-        "title: 20字以内标题；summary: 截图内容摘要；tags: 3-8个中文短标签数组；"
-        "idea: 可开发点子，包含用途、开发方向、下一步；priority: 只能是空字符串、高价值、待验证、可立即开发之一。\n\n"
-        f"原文件名: {image['original_name']}\n"
-        f"现有标题: {image['title']}\n现有内容: {image['note']}\n现有TAG: {', '.join(tags)}"
-    )
-    content = await call_metapi(settings, prompt, UPLOAD_DIR / image["filename"], max_tokens=1600)
-    data = extract_json_object(content)
-    title = str(data.get("title") or image["title"] or Path(image["original_name"]).stem)[:160]
-    summary = str(data.get("summary") or image["note"] or "")
-    idea = str(data.get("idea") or image["expanded_note"] or "")
-    priority = coerce_priority(str(data.get("priority") or ""))
-    raw_tags = data.get("tags") or tags
-    if not isinstance(raw_tags, list):
-        raw_tags = re.split(r"[,，、\s]+", str(raw_tags))
-    next_tags = normalize_tags([str(tag) for tag in raw_tags])
+    errors = []
+    result: dict[str, Any] | None = None
+    for model in image_model_fallbacks(settings):
+        set_image_ai_state(image_id, f"识别中: {model}")
+        try:
+            result = await analyze_image_with_model(settings, image, tags, model)
+            break
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+    if result is None:
+        detail = "；".join(errors) or "No image analysis models configured"
+        set_image_ai_state(image_id, "失败", detail)
+        raise HTTPException(status_code=502, detail=detail)
+
     with db() as conn:
         conn.execute(
             """
@@ -478,9 +633,18 @@ async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
             SET title = ?, note = ?, expanded_note = ?, priority = ?, ai_status = ?, ai_error = ?, updated_at = ?
             WHERE id = ?
             """,
-            (title, summary, idea, priority, "完成", "", now_iso(), image_id),
+            (
+                result["title"],
+                result["summary"],
+                result["idea"],
+                result["priority"],
+                f"完成: {result['model']}",
+                "",
+                now_iso(),
+                image_id,
+            ),
         )
-        set_image_tags(conn, image_id, next_tags)
+        set_image_tags(conn, image_id, result["tags"])
         updated = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
         return attach_image_urls(dict(updated), get_image_tags(conn, image_id))
 
@@ -935,6 +1099,9 @@ def get_effective_settings() -> dict[str, str]:
         return {
             "metapi_base_url": os.getenv("METAPI_BASE_URL") or get_setting(conn, "metapi_base_url"),
             "metapi_model": os.getenv("METAPI_MODEL") or get_setting(conn, "metapi_model", "gpt-4o-mini"),
+            "metapi_models": os.getenv("METAPI_MODELS") or get_setting(conn, "metapi_models", recommended_image_models_text()),
+            "metapi_compare_models": os.getenv("METAPI_COMPARE_MODELS")
+            or get_setting(conn, "metapi_compare_models", "\n".join(RECOMMENDED_IMAGE_MODELS[:3])),
             "metapi_provider": os.getenv("METAPI_PROVIDER") or get_setting(conn, "metapi_provider", "openai"),
             "metapi_api_key": os.getenv("METAPI_API_KEY") or get_setting(conn, "metapi_api_key"),
         }
@@ -1317,6 +1484,76 @@ async def organize_images(payload: ImageIdsIn) -> dict[str, Any]:
     return {"ok": True, "updated": updated, "errors": errors}
 
 
+@app.post("/api/images/{image_id}/compare")
+async def compare_image_models(image_id: int) -> dict[str, Any]:
+    settings = get_effective_settings()
+    if not settings["metapi_base_url"]:
+        raise HTTPException(status_code=400, detail="Metapi base URL is not configured")
+    with db() as conn:
+        row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Image not found")
+        image = dict(row)
+        tags = get_image_tags(conn, image_id)
+        conn.execute("DELETE FROM image_ai_candidates WHERE image_id = ?", (image_id,))
+
+    candidates = []
+    for model in image_compare_models(settings):
+        try:
+            result = await analyze_image_with_model(settings, image, tags, model)
+            candidates.append(store_ai_candidate(image_id, result))
+        except Exception as exc:
+            candidates.append(store_ai_candidate(image_id, {"model": model}, error=str(exc)))
+    return {"ok": True, "image_id": image_id, "candidates": candidates}
+
+
+@app.get("/api/images/{image_id}/candidates")
+def list_image_candidates(image_id: int) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT id FROM images WHERE id = ?", (image_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Image not found")
+        rows = conn.execute(
+            "SELECT * FROM image_ai_candidates WHERE image_id = ? ORDER BY created_at DESC, id DESC",
+            (image_id,),
+        ).fetchall()
+        return {"items": [candidate_from_row(item) for item in rows]}
+
+
+@app.post("/api/images/{image_id}/candidates/{candidate_id}/apply")
+def apply_image_candidate(image_id: int, candidate_id: int) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM image_ai_candidates WHERE id = ? AND image_id = ?",
+            (candidate_id, image_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Candidate not found")
+        candidate = candidate_from_row(row)
+        if candidate.get("error"):
+            raise HTTPException(status_code=400, detail="Cannot apply a failed candidate")
+        conn.execute(
+            """
+            UPDATE images
+            SET title = ?, note = ?, expanded_note = ?, priority = ?, ai_status = ?, ai_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                candidate["title"],
+                candidate["summary"],
+                candidate["idea"],
+                coerce_priority(candidate.get("priority")),
+                f"采用: {candidate['model']}",
+                "",
+                now_iso(),
+                image_id,
+            ),
+        )
+        set_image_tags(conn, image_id, candidate.get("tags") or [])
+        updated = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        return attach_image_urls(dict(updated), get_image_tags(conn, image_id))
+
+
 @app.post("/api/images/{image_id}/expand")
 async def expand_image_note(image_id: int) -> dict[str, Any]:
     settings = get_effective_settings()
@@ -1517,6 +1754,9 @@ def read_settings() -> dict[str, str]:
     return {
         "metapi_base_url": effective["metapi_base_url"],
         "metapi_model": effective["metapi_model"],
+        "metapi_models": effective["metapi_models"],
+        "metapi_compare_models": effective["metapi_compare_models"],
+        "recommended_image_models": RECOMMENDED_IMAGE_MODELS,
         "metapi_provider": effective["metapi_provider"],
         "metapi_api_key": "configured" if effective["metapi_api_key"] else "",
     }
