@@ -154,6 +154,35 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                total INTEGER NOT NULL DEFAULT 0,
+                completed INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                retry_limit INTEGER NOT NULL DEFAULT 10,
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                started_at TEXT NOT NULL DEFAULT '',
+                finished_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_job_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
+                image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+                image_title TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                model TEXT NOT NULL DEFAULT '',
+                attempt INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT '',
+                started_at TEXT NOT NULL DEFAULT '',
+                finished_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS work_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
@@ -276,6 +305,7 @@ class SettingsPatch(BaseModel):
     metapi_model: str = ""
     metapi_models: str = ""
     metapi_compare_models: str = ""
+    metapi_retry_attempts: str = "10"
     metapi_provider: str = "openai"
     metapi_api_key: str = ""
 
@@ -399,6 +429,14 @@ def image_model_fallbacks(settings: dict[str, str]) -> list[str]:
 def image_compare_models(settings: dict[str, str]) -> list[str]:
     models = parse_model_list(settings.get("metapi_compare_models"))
     return models or image_model_fallbacks(settings)[:3]
+
+
+def metapi_retry_attempts(settings: dict[str, str]) -> int:
+    try:
+        value = int(str(settings.get("metapi_retry_attempts") or "10").strip())
+    except ValueError:
+        value = 10
+    return min(50, max(1, value))
 
 
 def get_metapi_headers(settings: dict[str, str]) -> dict[str, str]:
@@ -602,8 +640,138 @@ def set_image_ai_state(image_id: int, status: str, error: str = "") -> None:
         )
 
 
-async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
+def update_ai_job_item(
+    item_id: int,
+    status: str,
+    model: str = "",
+    attempt: int = 0,
+    error: str = "",
+    started: bool = False,
+    finished: bool = False,
+) -> None:
+    updates = ["status = ?", "updated_at = ?"]
+    params: list[Any] = [status, now_iso()]
+    if model:
+        updates.append("model = ?")
+        params.append(model)
+    if attempt:
+        updates.append("attempt = ?")
+        params.append(attempt)
+    if error:
+        updates.append("error = ?")
+        params.append(error[:1000])
+    if started:
+        updates.append("started_at = ?")
+        params.append(now_iso())
+    if finished:
+        updates.append("finished_at = ?")
+        params.append(now_iso())
+    params.append(item_id)
+    with db() as conn:
+        conn.execute(f"UPDATE ai_job_items SET {', '.join(updates)} WHERE id = ?", params)
+
+
+def refresh_ai_job_counts(job_id: int, status: str | None = None, error: str = "", finished: bool = False) -> None:
+    with db() as conn:
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+            FROM ai_job_items
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        updates = [
+            "total = ?",
+            "completed = ?",
+            "failed = ?",
+            "updated_at = ?",
+        ]
+        params: list[Any] = [
+            counts["total"] or 0,
+            counts["completed"] or 0,
+            counts["failed"] or 0,
+            now_iso(),
+        ]
+        if status:
+            updates.append("status = ?")
+            params.append(status)
+        if error:
+            updates.append("error = ?")
+            params.append(error[:1000])
+        if finished:
+            updates.append("finished_at = ?")
+            params.append(now_iso())
+        params.append(job_id)
+        conn.execute(f"UPDATE ai_jobs SET {', '.join(updates)} WHERE id = ?", params)
+
+
+def ai_job_from_row(conn: sqlite3.Connection, row: sqlite3.Row, include_items: bool = False) -> dict[str, Any]:
+    job = dict(row)
+    if include_items:
+        item_rows = conn.execute(
+            """
+            SELECT ai_job_items.*, images.thumb_filename
+            FROM ai_job_items
+            LEFT JOIN images ON images.id = ai_job_items.image_id
+            WHERE ai_job_items.job_id = ?
+            ORDER BY ai_job_items.id
+            """,
+            (row["id"],),
+        ).fetchall()
+        items = []
+        for item_row in item_rows:
+            item = dict(item_row)
+            item["thumb_url"] = f"/thumbs/{item['thumb_filename']}" if item.get("thumb_filename") else ""
+            items.append(item)
+        job["items"] = items
+    return job
+
+
+def create_image_organize_job(ids: list[int], retry_limit: int) -> dict[str, Any]:
+    created_at = now_iso()
+    with db() as conn:
+        rows = conn.execute(
+            f"SELECT id, title, original_name FROM images WHERE id IN ({','.join('?' for _ in ids)})",
+            ids,
+        ).fetchall()
+        found = {row["id"]: row for row in rows}
+        if not found:
+            raise HTTPException(status_code=400, detail="No valid images selected")
+        cur = conn.execute(
+            """
+            INSERT INTO ai_jobs (job_type, status, total, retry_limit, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("image_organize", "queued", len(found), retry_limit, created_at, created_at),
+        )
+        job_id = cur.lastrowid
+        for image_id in ids:
+            row = found.get(image_id)
+            if not row:
+                continue
+            conn.execute(
+                """
+                INSERT INTO ai_job_items (job_id, image_id, image_title, status, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (job_id, image_id, row["title"] or row["original_name"], "queued", created_at),
+            )
+            conn.execute("UPDATE images SET ai_status = ?, ai_error = ?, updated_at = ? WHERE id = ?", ("排队", "", created_at, image_id))
+        job_row = conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        return ai_job_from_row(conn, job_row, include_items=True)
+
+
+async def organize_image_with_ai(
+    image_id: int,
+    retry_limit: int | None = None,
+    job_item_id: int | None = None,
+) -> dict[str, Any]:
     settings = get_effective_settings()
+    max_attempts = retry_limit or metapi_retry_attempts(settings)
     set_image_ai_state(image_id, "识别中")
     with db() as conn:
         row = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
@@ -614,16 +782,27 @@ async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
 
     errors = []
     result: dict[str, Any] | None = None
-    for model in image_model_fallbacks(settings):
-        set_image_ai_state(image_id, f"识别中: {model}")
+    models = image_model_fallbacks(settings)
+    for index in range(max_attempts):
+        model = models[index % len(models)]
+        attempt = index + 1
+        status = f"识别中: {model} ({attempt}/{max_attempts})"
+        set_image_ai_state(image_id, status)
+        if job_item_id:
+            update_ai_job_item(job_item_id, "running", model=model, attempt=attempt, started=attempt == 1)
         try:
             result = await analyze_image_with_model(settings, image, tags, model)
             break
         except Exception as exc:
-            errors.append(f"{model}: {exc}")
+            error_text = f"{model} 第{attempt}次: {exc}"
+            errors.append(error_text)
+            if job_item_id:
+                update_ai_job_item(job_item_id, "retrying", model=model, attempt=attempt, error=error_text)
     if result is None:
         detail = "；".join(errors) or "No image analysis models configured"
         set_image_ai_state(image_id, "失败", detail)
+        if job_item_id:
+            update_ai_job_item(job_item_id, "failed", attempt=max_attempts, error=detail, finished=True)
         raise HTTPException(status_code=502, detail=detail)
 
     with db() as conn:
@@ -646,6 +825,15 @@ async def organize_image_with_ai(image_id: int) -> dict[str, Any]:
         )
         set_image_tags(conn, image_id, result["tags"])
         updated = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
+        if job_item_id:
+            conn.execute(
+                """
+                UPDATE ai_job_items
+                SET status = ?, model = ?, error = ?, finished_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                ("done", result["model"], "", now_iso(), now_iso(), job_item_id),
+            )
         return attach_image_urls(dict(updated), get_image_tags(conn, image_id))
 
 
@@ -654,6 +842,44 @@ async def organize_image_background(image_id: int) -> None:
         await organize_image_with_ai(image_id)
     except Exception as exc:
         set_image_ai_state(image_id, "失败", str(exc))
+
+
+async def run_image_organize_job(job_id: int) -> None:
+    refresh_ai_job_counts(job_id, status="running")
+    with db() as conn:
+        conn.execute("UPDATE ai_jobs SET started_at = ?, updated_at = ? WHERE id = ?", (now_iso(), now_iso(), job_id))
+        job = conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not job:
+            return
+        item_rows = conn.execute(
+            "SELECT id, image_id FROM ai_job_items WHERE job_id = ? ORDER BY id",
+            (job_id,),
+        ).fetchall()
+        retry_limit = int(job["retry_limit"] or 10)
+    for item in item_rows:
+        if not item["image_id"]:
+            update_ai_job_item(item["id"], "failed", error="Image no longer exists", finished=True)
+            refresh_ai_job_counts(job_id)
+            continue
+        try:
+            await organize_image_with_ai(item["image_id"], retry_limit=retry_limit, job_item_id=item["id"])
+        except Exception:
+            pass
+        refresh_ai_job_counts(job_id)
+    with db() as conn:
+        counts = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+            FROM ai_job_items
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        final_status = "done" if (counts["failed"] or 0) == 0 else "partial_failed"
+    refresh_ai_job_counts(job_id, status=final_status, finished=True)
 
 
 def get_image_tags(conn: sqlite3.Connection, image_id: int) -> list[str]:
@@ -1102,6 +1328,8 @@ def get_effective_settings() -> dict[str, str]:
             "metapi_models": os.getenv("METAPI_MODELS") or get_setting(conn, "metapi_models", recommended_image_models_text()),
             "metapi_compare_models": os.getenv("METAPI_COMPARE_MODELS")
             or get_setting(conn, "metapi_compare_models", "\n".join(RECOMMENDED_IMAGE_MODELS[:3])),
+            "metapi_retry_attempts": os.getenv("METAPI_RETRY_ATTEMPTS")
+            or get_setting(conn, "metapi_retry_attempts", "10"),
             "metapi_provider": os.getenv("METAPI_PROVIDER") or get_setting(conn, "metapi_provider", "openai"),
             "metapi_api_key": os.getenv("METAPI_API_KEY") or get_setting(conn, "metapi_api_key"),
         }
@@ -1471,17 +1699,27 @@ async def organize_image(image_id: int) -> dict[str, Any]:
 
 
 @app.post("/api/images-organize")
-async def organize_images(payload: ImageIdsIn) -> dict[str, Any]:
-    updated = 0
-    errors: list[dict[str, Any]] = []
-    for image_id in payload.ids:
-        try:
-            await organize_image_with_ai(image_id)
-            updated += 1
-        except Exception as exc:
-            set_image_ai_state(image_id, "失败", str(exc))
-            errors.append({"id": image_id, "error": str(exc)})
-    return {"ok": True, "updated": updated, "errors": errors}
+async def organize_images(payload: ImageIdsIn, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    settings = get_effective_settings()
+    job = create_image_organize_job(payload.ids, metapi_retry_attempts(settings))
+    background_tasks.add_task(run_image_organize_job, job["id"])
+    return {"ok": True, "job": job}
+
+
+@app.get("/api/ai-jobs")
+def list_ai_jobs() -> dict[str, Any]:
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM ai_jobs ORDER BY id DESC LIMIT 20").fetchall()
+        return {"items": [ai_job_from_row(conn, row, include_items=True) for row in rows]}
+
+
+@app.get("/api/ai-jobs/{job_id}")
+def get_ai_job(job_id: int) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM ai_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="AI job not found")
+        return ai_job_from_row(conn, row, include_items=True)
 
 
 @app.post("/api/images/{image_id}/compare")
@@ -1756,6 +1994,7 @@ def read_settings() -> dict[str, Any]:
         "metapi_model": effective["metapi_model"],
         "metapi_models": effective["metapi_models"],
         "metapi_compare_models": effective["metapi_compare_models"],
+        "metapi_retry_attempts": effective["metapi_retry_attempts"],
         "recommended_image_models": RECOMMENDED_IMAGE_MODELS,
         "metapi_provider": effective["metapi_provider"],
         "metapi_api_key": "configured" if effective["metapi_api_key"] else "",

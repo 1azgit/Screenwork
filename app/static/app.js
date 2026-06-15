@@ -22,6 +22,8 @@ const state = {
     drawing: null,
   },
   compareImageId: null,
+  aiJobs: [],
+  aiJobTimer: null,
 };
 
 const PRIORITIES = ["", "高价值", "待验证", "可立即开发"];
@@ -551,11 +553,74 @@ async function organizeSelectedImages() {
       body: JSON.stringify({ ids: [...state.selectedIds] }),
     });
     await loadImages();
-    setStatus(result.errors.length ? `完成 ${result.updated} 张，失败 ${result.errors.length} 张` : `AI 整理完成 ${result.updated} 张`);
+    await loadAiJobs();
+    setStatus(`已创建 AI 识别任务 #${result.job.id}，共 ${result.job.total} 张`);
   } catch (error) {
     setStatus(error.message);
     await loadImages();
   }
+}
+
+async function loadAiJobs() {
+  try {
+    const data = await api("/api/ai-jobs");
+    state.aiJobs = data.items || [];
+    renderAiJobs();
+    scheduleAiJobPolling();
+  } catch (error) {
+    $("aiJobList").innerHTML = `<div class="empty-line">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderAiJobs() {
+  const list = $("aiJobList");
+  if (!state.aiJobs.length) {
+    list.innerHTML = '<div class="empty-line">还没有批量识别任务</div>';
+    return;
+  }
+  list.innerHTML = state.aiJobs.map(renderAiJob).join("");
+}
+
+function renderAiJob(job) {
+  const total = job.total || 0;
+  const done = job.completed || 0;
+  const failed = job.failed || 0;
+  const percent = total ? Math.round(((done + failed) / total) * 100) : 0;
+  const items = (job.items || []).slice(0, 8).map(renderAiJobItem).join("");
+  const more = (job.items || []).length > 8 ? `<div class="task-more">还有 ${(job.items || []).length - 8} 项</div>` : "";
+  return `
+    <article class="task-card ${escapeAttr(job.status)}">
+      <header>
+        <div>
+          <strong>#${job.id} 批量AI识别</strong>
+          <span>${escapeHtml(jobStatusLabel(job.status))} / ${done} 完成 / ${failed} 失败 / 共 ${total} 张 / 重试 ${job.retry_limit} 次</span>
+        </div>
+        <span>${percent}%</span>
+      </header>
+      <div class="task-progress"><div style="width:${percent}%"></div></div>
+      <div class="task-items">${items}${more}</div>
+    </article>
+  `;
+}
+
+function renderAiJobItem(item) {
+  const thumb = item.thumb_url ? `<img src="${escapeAttr(item.thumb_url)}" alt="" loading="lazy" />` : '<div class="task-thumb-empty"></div>';
+  return `
+    <div class="task-item ${escapeAttr(item.status)}">
+      ${thumb}
+      <div>
+        <strong>${escapeHtml(item.image_title || `图片 ${item.image_id || ""}`)}</strong>
+        <span>${escapeHtml(jobStatusLabel(item.status))}${item.model ? ` / ${escapeHtml(item.model)}` : ""}${item.attempt ? ` / 第 ${item.attempt} 次` : ""}</span>
+        ${item.error ? `<small>${escapeHtml(item.error)}</small>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function scheduleAiJobPolling() {
+  const hasActiveJob = state.aiJobs.some((job) => ["queued", "running"].includes(job.status));
+  clearTimeout(state.aiJobTimer);
+  state.aiJobTimer = hasActiveJob ? setTimeout(loadAiJobs, 3000) : null;
 }
 
 async function compareImageModels(id) {
@@ -1061,6 +1126,7 @@ async function openSettings() {
   $("metapiModel").value = settings.metapi_model || "";
   $("metapiModels").value = settings.metapi_models || (settings.recommended_image_models || []).join("\n");
   $("metapiCompareModels").value = settings.metapi_compare_models || (settings.recommended_image_models || []).slice(0, 3).join("\n");
+  $("metapiRetryAttempts").value = settings.metapi_retry_attempts || "10";
   $("metapiProvider").value = settings.metapi_provider || "openai";
   $("metapiApiKey").value = "";
   $("settingsDialog").showModal();
@@ -1077,6 +1143,7 @@ async function saveSettings(event) {
         metapi_model: $("metapiModel").value,
         metapi_models: $("metapiModels").value,
         metapi_compare_models: $("metapiCompareModels").value,
+        metapi_retry_attempts: $("metapiRetryAttempts").value,
         metapi_provider: $("metapiProvider").value,
         metapi_api_key: $("metapiApiKey").value,
       }),
@@ -1600,6 +1667,17 @@ function statusLabel(value = "new") {
   return STATUSES.find(([status]) => status === value)?.[1] || value;
 }
 
+function jobStatusLabel(value = "") {
+  return {
+    queued: "排队",
+    running: "运行中",
+    retrying: "重试中",
+    done: "完成",
+    failed: "失败",
+    partial_failed: "部分失败",
+  }[value] || value || "未知";
+}
+
 function initTagInput(container, values = []) {
   container.dataset.tags = JSON.stringify(uniqueTags(values));
   container.innerHTML = `
@@ -1732,6 +1810,7 @@ $("refreshButton").onclick = loadImages;
 $("cancelSelectionButton").onclick = clearImageSelection;
 $("deleteSelectedButton").onclick = deleteSelectedImages;
 $("organizeSelectedButton").onclick = organizeSelectedImages;
+$("refreshJobsButton").onclick = loadAiJobs;
 $("exportButton").onclick = exportSelected;
 $("listViewButton").onclick = () => setView("list");
 $("imageBoardButton").onclick = () => setView("image-board");
@@ -1771,4 +1850,4 @@ $("annotationSvg").onpointerleave = finishAnnotation;
 window.addEventListener("resize", renderAnnotationSvg);
 updateViewButtons();
 
-Promise.all([loadCategories(), loadWorkGroups(), loadImages()]).catch((error) => setStatus(error.message));
+Promise.all([loadCategories(), loadWorkGroups(), loadImages(), loadAiJobs()]).catch((error) => setStatus(error.message));

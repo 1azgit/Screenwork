@@ -70,6 +70,7 @@ METAPI_BASE_URL=http://host.docker.internal:3000
 METAPI_MODEL=alibaba/qwen3-vl-plus
 METAPI_MODELS=alibaba/qwen3-vl-plus,alibaba/qwen3-vl-flash,alibaba/qwen3-vl-235b-a22b-instruct
 METAPI_COMPARE_MODELS=alibaba/qwen3-vl-plus,glm-5v-turbo,deepseek-v4-vision
+METAPI_RETRY_ATTEMPTS=10
 METAPI_PROVIDER=openai
 METAPI_API_KEY=
 ```
@@ -96,7 +97,7 @@ For image analysis testing, OpenAI and Anthropic/Claude models are intentionally
 - `deepseek-v4-vision`
 - `meta/llama-3.2-90b-vision-instruct`
 
-`METAPI_MODELS` is used for batch AI organizing with fallback: Screenwork tries each model in order until one succeeds. `METAPI_COMPARE_MODELS` is used by the image detail page's multi-model comparison dialog, where each model result can be reviewed and applied manually.
+`METAPI_MODELS` is used for batch AI organizing with fallback: Screenwork tries each model in order until one succeeds. `METAPI_RETRY_ATTEMPTS` controls how many total attempts are made per image before it is marked failed; the default is 10. `METAPI_COMPARE_MODELS` is used by the image detail page's multi-model comparison dialog, where each model result can be reviewed and applied manually.
 
 ## Data
 

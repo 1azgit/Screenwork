@@ -85,6 +85,16 @@
           <button id="workBoardButton" class="button">工作看板</button>
         </div>
 
+        <section id="aiJobPanel" class="task-panel">
+          <div class="task-panel-head">
+            <strong>AI识别任务</strong>
+            <button id="refreshJobsButton" class="small-button" type="button">↻</button>
+          </div>
+          <div id="aiJobList" class="task-list">
+            <div class="empty-line">还没有批量识别任务</div>
+          </div>
+        </section>
+
         <div class="workarea">
           <div id="imageGrid" class="image-grid"></div>
 
@@ -143,6 +153,7 @@
           <label>模型名<input id="metapiModel" class="control" placeholder="alibaba/qwen3-vl-plus" /></label>
           <label>图片整理模型列表<textarea id="metapiModels" class="control model-list-input" placeholder="一行一个模型，失败后自动切换下一个"></textarea></label>
           <label>多模型对比列表<textarea id="metapiCompareModels" class="control model-list-input" placeholder="一行一个模型，用于人工对比"></textarea></label>
+          <label>失败重试次数<input id="metapiRetryAttempts" class="control" type="number" min="1" max="50" step="1" placeholder="10" /></label>
           <label>接口类型
             <select id="metapiProvider" class="control">
               <option value="openai">OpenAI Compatible</option>
