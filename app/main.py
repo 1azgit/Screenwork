@@ -1749,7 +1749,7 @@ async def generate_work_group_plan(group_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/settings")
-def read_settings() -> dict[str, str]:
+def read_settings() -> dict[str, Any]:
     effective = get_effective_settings()
     return {
         "metapi_base_url": effective["metapi_base_url"],
