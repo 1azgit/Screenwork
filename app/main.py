@@ -1098,7 +1098,7 @@ def get_effective_settings() -> dict[str, str]:
     with db() as conn:
         return {
             "metapi_base_url": os.getenv("METAPI_BASE_URL") or get_setting(conn, "metapi_base_url"),
-            "metapi_model": os.getenv("METAPI_MODEL") or get_setting(conn, "metapi_model", "gpt-4o-mini"),
+            "metapi_model": os.getenv("METAPI_MODEL") or get_setting(conn, "metapi_model", RECOMMENDED_IMAGE_MODELS[0]),
             "metapi_models": os.getenv("METAPI_MODELS") or get_setting(conn, "metapi_models", recommended_image_models_text()),
             "metapi_compare_models": os.getenv("METAPI_COMPARE_MODELS")
             or get_setting(conn, "metapi_compare_models", "\n".join(RECOMMENDED_IMAGE_MODELS[:3])),
