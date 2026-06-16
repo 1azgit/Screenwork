@@ -46,43 +46,49 @@
 
       <section class="content">
         <div class="toolbar">
-          <div class="search-box">
-            <input id="searchInput" class="control search" placeholder="搜索标题 / 内容 / TAG，双空格生成标记" />
-            <div id="searchTokens" class="search-tokens"></div>
+          <div class="toolbar-group toolbar-search">
+            <div class="search-box">
+              <input id="searchInput" class="control search" placeholder="搜索标题 / 内容 / TAG，双空格生成标记" />
+              <div id="searchTokens" class="search-tokens"></div>
+            </div>
+            <select id="timeSort" class="control compact-control" aria-label="时间排序">
+              <option value="newest">最新优先</option>
+              <option value="oldest">最早优先</option>
+            </select>
+            <select id="priorityFilter" class="control compact-control" aria-label="优先级">
+              <option value="">全部优先级</option>
+              <option value="高价值">高价值</option>
+              <option value="待验证">待验证</option>
+              <option value="可立即开发">可立即开发</option>
+            </select>
+            <label class="inline-check toolbar-check">
+              <input id="starredFilter" type="checkbox" />
+              星标
+            </label>
+            <label class="inline-check toolbar-check">
+              <input id="noContentFilter" type="checkbox" />
+              无内容
+            </label>
           </div>
-          <select id="timeSort" class="control compact-control" aria-label="时间排序">
-            <option value="newest">最新优先</option>
-            <option value="oldest">最早优先</option>
-          </select>
-          <select id="priorityFilter" class="control compact-control" aria-label="优先级">
-            <option value="">全部优先级</option>
-            <option value="高价值">高价值</option>
-            <option value="待验证">待验证</option>
-            <option value="可立即开发">可立即开发</option>
-          </select>
-          <label class="inline-check toolbar-check">
-            <input id="starredFilter" type="checkbox" />
-            星标
-          </label>
-          <label class="inline-check toolbar-check">
-            <input id="noContentFilter" type="checkbox" />
-            无内容
-          </label>
-          <button id="refreshButton" class="button">刷新</button>
-          <button id="cancelSelectionButton" class="button">取消</button>
-          <button id="deleteSelectedButton" class="button danger-button">删除</button>
-          <button id="organizeSelectedButton" class="button">AI整理选中</button>
-          <select id="exportFormat" class="control compact-control" aria-label="导出格式">
-            <option value="zip">ZIP 完整包</option>
-            <option value="markdown">Markdown</option>
-            <option value="excel">Excel</option>
-            <option value="notion">Notion CSV</option>
-          </select>
-          <button id="exportButton" class="button">导出选中</button>
-          <button id="listViewButton" class="button primary">列表</button>
-          <button id="imageBoardButton" class="button">图片看板</button>
-          <button id="timelineViewButton" class="button">时间线</button>
-          <button id="workBoardButton" class="button">工作看板</button>
+          <div class="toolbar-group toolbar-actions">
+            <button id="refreshButton" class="button">刷新</button>
+            <button id="cancelSelectionButton" class="button">取消</button>
+            <button id="deleteSelectedButton" class="button danger-button">删除</button>
+            <button id="organizeSelectedButton" class="button">AI整理选中</button>
+            <select id="exportFormat" class="control compact-control" aria-label="导出格式">
+              <option value="zip">ZIP 完整包</option>
+              <option value="markdown">Markdown</option>
+              <option value="excel">Excel</option>
+              <option value="notion">Notion CSV</option>
+            </select>
+            <button id="exportButton" class="button">导出选中</button>
+          </div>
+          <div class="toolbar-group toolbar-views">
+            <button id="listViewButton" class="button primary">列表</button>
+            <button id="imageBoardButton" class="button">图片看板</button>
+            <button id="timelineViewButton" class="button">时间线</button>
+            <button id="workBoardButton" class="button">工作看板</button>
+          </div>
         </div>
 
         <section id="aiJobPanel" class="task-panel">
@@ -96,7 +102,13 @@
         </section>
 
         <div class="workarea">
-          <div id="imageGrid" class="image-grid"></div>
+          <section class="image-panel">
+            <div id="imageGrid" class="image-grid"></div>
+            <div class="list-footer">
+              <span id="imageListMeta">显示 0 / 0</span>
+              <button id="loadMoreImagesButton" class="button" type="button">加载更多</button>
+            </div>
+          </section>
 
           <article id="detailPanel" class="detail empty">
             <div class="empty-state">选择一张截图开始整理</div>

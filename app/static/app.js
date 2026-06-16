@@ -2,7 +2,11 @@ const state = {
   categories: [],
   workGroups: [],
   categoryId: null,
+  imageScope: "recent",
   images: [],
+  imageTotal: 0,
+  imagePage: 1,
+  imagePageSize: 50,
   selectedId: null,
   selectedIds: new Set(),
   searchTokens: [],
@@ -75,16 +79,35 @@ async function loadCategories() {
 function renderCategories() {
   const root = $("categoryTree");
   root.innerHTML = "";
+  const recent = document.createElement("button");
+  recent.className = `tree-button ${state.imageScope === "recent" && state.categoryId === null ? "active" : ""}`;
+  recent.textContent = "最近截图";
+  recent.onclick = () => {
+    state.mode = "images";
+    state.imageScope = "recent";
+    state.view = ["image-board", "timeline"].includes(state.view) ? state.view : "list";
+    state.categoryId = null;
+    state.imagePage = 1;
+    state.selectedId = null;
+    renderCategories();
+    updateViewButtons();
+    resetAndLoadImages();
+  };
+  root.appendChild(recent);
+
   const all = document.createElement("button");
-  all.className = `tree-button ${state.categoryId === null ? "active" : ""}`;
+  all.className = `tree-button ${state.imageScope === "all" && state.categoryId === null ? "active" : ""}`;
   all.textContent = "全部截图";
   all.onclick = () => {
     state.mode = "images";
+    state.imageScope = "all";
     state.view = ["image-board", "timeline"].includes(state.view) ? state.view : "list";
     state.categoryId = null;
+    state.imagePage = 1;
+    state.selectedId = null;
     renderCategories();
     updateViewButtons();
-    loadImages();
+    resetAndLoadImages();
   };
   root.appendChild(all);
 
@@ -99,11 +122,14 @@ function renderCategories() {
     button.textContent = node.name;
     button.onclick = () => {
       state.mode = "images";
+      state.imageScope = "category";
       state.view = ["image-board", "timeline"].includes(state.view) ? state.view : "list";
       state.categoryId = node.id;
+      state.imagePage = 1;
+      state.selectedId = null;
       renderCategories();
       updateViewButtons();
-      loadImages();
+      resetAndLoadImages();
     };
     const add = document.createElement("button");
     add.className = "small-button";
@@ -158,6 +184,7 @@ function setView(view) {
     setStatus(`${state.workGroups.length} 个工作项目`);
   } else {
     state.mode = "images";
+    state.imagePage = 1;
     loadImages();
   }
   updateViewButtons();
@@ -238,7 +265,7 @@ function renderSearchTokens() {
     chip.onclick = () => {
       state.searchTokens = state.searchTokens.filter((item) => item !== token);
       renderSearchTokens();
-      loadImages();
+      resetAndLoadImages();
     };
     box.appendChild(chip);
   }
@@ -250,7 +277,7 @@ function handleSearchInput(event) {
     const parts = value.split(/\s{2,}/);
     for (const part of parts.slice(0, -1)) addSearchToken(part);
     event.target.value = parts[parts.length - 1] || "";
-    loadImages();
+    resetAndLoadImages();
     return;
   }
   debounceLoadImages();
@@ -261,10 +288,22 @@ function handleSearchKeydown(event) {
   event.preventDefault();
   addSearchToken(event.target.value);
   event.target.value = "";
+  resetAndLoadImages();
+}
+
+const debounceLoadImages = debounce(resetAndLoadImages);
+
+function resetAndLoadImages() {
+  state.imagePage = 1;
   loadImages();
 }
 
-const debounceLoadImages = debounce(loadImages);
+function loadMoreImages() {
+  if (state.imageScope === "recent" && !state.categoryId) return;
+  if (state.images.length >= state.imageTotal) return;
+  state.imagePage += 1;
+  loadImages();
+}
 
 async function loadImages() {
   if (state.mode !== "images") return;
@@ -279,10 +318,15 @@ async function loadImages() {
   if (state.view === "timeline") {
     params.set("timeline", "true");
     params.set("page_size", "200");
+  } else {
+    params.set("page", String(state.imagePage || 1));
+    params.set("page_size", String(state.imagePageSize || 50));
   }
+  if (state.imageScope !== "all" && !state.categoryId) params.set("scope", "recent");
   if ($("noContentFilter").checked) params.set("no_content", "true");
   const data = await api(`/api/images?${params.toString()}`);
-  state.images = data.items;
+  state.images = state.imagePage > 1 ? [...state.images, ...data.items] : data.items;
+  state.imageTotal = data.total || 0;
   renderImageCollection();
   setStatus(`${data.total} 张截图`);
 }
@@ -291,6 +335,7 @@ function renderImageCollection() {
   if (state.view === "image-board") renderImageBoard();
   else if (state.view === "timeline") renderTimeline();
   else renderImages();
+  updateImageListMeta();
 }
 
 function renderImages() {
@@ -300,6 +345,19 @@ function renderImages() {
   for (const image of state.images) {
     grid.appendChild(createImageCard(image));
   }
+}
+
+function updateImageListMeta() {
+  const footer = $("imageListMeta");
+  const button = $("loadMoreImagesButton");
+  if (!footer || !button) return;
+  const isPagedList = state.mode === "images" && state.view === "list";
+  const isRecentHome = state.imageScope === "recent" && !state.categoryId;
+  button.hidden = !isPagedList || isRecentHome;
+  footer.textContent = isRecentHome
+    ? `首页显示最近 ${state.images.length} 张 / 共 ${state.imageTotal} 张，查看更多请点“全部截图”`
+    : `显示 ${state.images.length} / ${state.imageTotal}`;
+  button.disabled = !isPagedList || isRecentHome || state.images.length >= state.imageTotal;
 }
 
 function createImageCard(image) {
@@ -1812,6 +1870,7 @@ $("deleteSelectedButton").onclick = deleteSelectedImages;
 $("organizeSelectedButton").onclick = organizeSelectedImages;
 $("refreshJobsButton").onclick = loadAiJobs;
 $("exportButton").onclick = exportSelected;
+$("loadMoreImagesButton").onclick = loadMoreImages;
 $("listViewButton").onclick = () => setView("list");
 $("imageBoardButton").onclick = () => setView("image-board");
 $("timelineViewButton").onclick = () => setView("timeline");
@@ -1820,11 +1879,11 @@ $("settingsButton").onclick = openSettings;
 $("saveSettingsButton").onclick = saveSettings;
 $("createBackupButton").onclick = createLocalBackup;
 $("restoreBackupButton").onclick = restoreLocalBackup;
-$("statusFilter").onchange = loadImages;
-$("timeSort").onchange = loadImages;
-$("priorityFilter").onchange = loadImages;
-$("starredFilter").onchange = loadImages;
-$("noContentFilter").onchange = loadImages;
+$("statusFilter").onchange = resetAndLoadImages;
+$("timeSort").onchange = resetAndLoadImages;
+$("priorityFilter").onchange = resetAndLoadImages;
+$("starredFilter").onchange = resetAndLoadImages;
+$("noContentFilter").onchange = resetAndLoadImages;
 $("searchInput").oninput = handleSearchInput;
 $("searchInput").onkeydown = handleSearchKeydown;
 $("lightboxClose").onclick = closeLightbox;

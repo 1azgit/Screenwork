@@ -1494,8 +1494,9 @@ def list_images(
     sort: str = "newest",
     timeline: bool = False,
     no_content: bool = False,
+    scope: str = "",
     page: int = 1,
-    page_size: int = 60,
+    page_size: int = 50,
 ) -> dict[str, Any]:
     page = max(page, 1)
     page_size = min(max(page_size, 1), 200)
@@ -1538,6 +1539,9 @@ def list_images(
             params.extend([like, like, like, like, like, like, like, like])
     if no_content:
         where.append("trim(i.note) = '' AND trim(i.expanded_note) = ''")
+    if scope == "recent" and category_id is None and not status and not priority and not starred and not tag and not q and not no_content:
+        page = 1
+        page_size = min(page_size, 50)
     if tag:
         join = "JOIN image_tags it ON it.image_id = i.id JOIN tags t ON t.id = it.tag_id"
         where.append("t.name = ?")
